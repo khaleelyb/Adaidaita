@@ -1,144 +1,103 @@
-import { Trip, TripStatus, UserRole, Location } from '../types';
-import { INITIAL_MAP_CENTER } from '../constants';
+import { createClient } from '@supabase/supabase-js';
+import { SUPABASE_CONFIG } from '../constants';
+import { Trip, TripStatus, Location } from '../types';
 
-// This class mimics the behavior of Supabase Realtime channels and DB calls
-// to allow the UI to function without a live backend connection.
+// Initialize real Supabase client
+const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
 
-type SubscriptionCallback = (payload: any) => void;
+export class RealSupabase {
+  // Subscribe to realtime changes
+  subscribe(channelName: string, callback: (data: any) => void) {
+    const channel = supabase
+      .channel(channelName)
+      .on('postgres_changes', 
+        { 
+          event: '*', 
+          schema: 'public',
+          table: 'trips' 
+        }, 
+        (payload) => {
+          callback(payload);
+        }
+      )
+      .subscribe();
 
-class MockSupabase {
-  private channels: Map<string, Set<SubscriptionCallback>> = new Map();
-  private activeTrip: Trip | null = null;
-  private tripUpdateInterval: any = null;
-
-  constructor() {}
-
-  // --- Realtime Simulation ---
-
-  subscribe(channelName: string, callback: SubscriptionCallback) {
-    if (!this.channels.has(channelName)) {
-      this.channels.set(channelName, new Set());
-    }
-    this.channels.get(channelName)?.add(callback);
-
-    console.log(`[Supabase] Subscribed to ${channelName}`);
-    
     return {
       unsubscribe: () => {
-        this.channels.get(channelName)?.delete(callback);
-        console.log(`[Supabase] Unsubscribed from ${channelName}`);
+        supabase.removeChannel(channel);
       }
     };
   }
 
-  send(channelName: string, event: string, payload: any) {
-    // Simulate network latency
-    setTimeout(() => {
-      const subscribers = this.channels.get(channelName);
-      if (subscribers) {
-        subscribers.forEach(cb => cb({ event, payload }));
-      }
-    }, 100);
-  }
-
-  // --- Database Simulation ---
-
+  // Create a new trip
   async createTrip(riderId: string, pickup: string, destination: string): Promise<Trip> {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const newTrip: Trip = {
-          id: `trip-${Date.now()}`,
-          riderId,
-          pickup,
-          destination,
-          status: TripStatus.SEARCHING,
-          fare: Math.floor(Math.random() * 2000) + 500,
-        };
-        this.activeTrip = newTrip;
-        resolve(newTrip);
-        
-        // Simulate a driver accepting after 3 seconds
-        this.simulateDriverAcceptance(newTrip.id);
-      }, 800);
-    });
+    const fare = Math.floor(Math.random() * 2000) + 500;
+    
+    const { data, error } = await supabase
+      .from('trips')
+      .insert({
+        rider_id: riderId,
+        pickup_location: pickup,
+        destination_location: destination,
+        status: TripStatus.SEARCHING,
+        fare
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    return {
+      id: data.id,
+      riderId: data.rider_id,
+      driverId: data.driver_id,
+      pickup: data.pickup_location,
+      destination: data.destination_location,
+      status: data.status,
+      fare: data.fare
+    };
   }
 
+  // Update trip status
   async updateTripStatus(tripId: string, status: TripStatus): Promise<Trip | null> {
-     return new Promise((resolve) => {
-       setTimeout(() => {
-         if (this.activeTrip && this.activeTrip.id === tripId) {
-           this.activeTrip.status = status;
-           // Notify listeners
-           this.send(`trip-${tripId}`, 'status_change', { status });
-           resolve(this.activeTrip);
-         } else {
-           resolve(null);
-         }
-       }, 500);
-     });
+    const { data, error } = await supabase
+      .from('trips')
+      .update({ status })
+      .eq('id', tripId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating trip:', error);
+      return null;
+    }
+
+    return {
+      id: data.id,
+      riderId: data.rider_id,
+      driverId: data.driver_id,
+      pickup: data.pickup_location,
+      destination: data.destination_location,
+      status: data.status,
+      fare: data.fare
+    };
   }
 
-  // --- Internal Simulation Logic ---
+  // Update driver location
+  async updateDriverLocation(driverId: string, location: Location) {
+    const { error } = await supabase
+      .from('driver_locations')
+      .upsert({
+        driver_id: driverId,
+        lat: location.lat,
+        lng: location.lng,
+        bearing: location.bearing || 0
+      });
 
-  private simulateDriverAcceptance(tripId: string) {
-    setTimeout(() => {
-      if (this.activeTrip && this.activeTrip.id === tripId) {
-        this.activeTrip.status = TripStatus.ACCEPTED;
-        this.activeTrip.driverId = 'driver-456';
-        
-        // Start slightly offset from center
-        const startLat = INITIAL_MAP_CENTER.lat - 0.002;
-        const startLng = INITIAL_MAP_CENTER.lng - 0.002;
-        
-        this.activeTrip.driverLocation = { lat: startLat, lng: startLng, bearing: 45 }; 
-        
-        // Notify Rider
-        this.send(`trip-${tripId}`, 'trip_accepted', { 
-          trip: this.activeTrip,
-          driverId: 'driver-456' 
-        });
-
-        // Start transmitting simulated driver location
-        this.startDriverLocationUpdates(tripId);
-      }
-    }, 4000);
-  }
-
-  private startDriverLocationUpdates(tripId: string) {
-    if (this.tripUpdateInterval) clearInterval(this.tripUpdateInterval);
-    
-    // Start state
-    let lat = INITIAL_MAP_CENTER.lat - 0.002;
-    let lng = INITIAL_MAP_CENTER.lng - 0.002;
-    let heading = 45; // Degrees
-    
-    this.tripUpdateInterval = setInterval(() => {
-      if (!this.activeTrip || this.activeTrip.status === TripStatus.COMPLETED || this.activeTrip.status === TripStatus.IDLE) {
-        clearInterval(this.tripUpdateInterval);
-        return;
-      }
-
-      // Smooth Car Movement Logic
-      const speed = 0.00015; // ~15m per second (approx 50km/h scale)
-      
-      // Add slight randomness to steering to simulate driving on roads
-      const steering = (Math.random() - 0.5) * 20; // +/- 10 degrees turn
-      heading = (heading + steering + 360) % 360;
-
-      // Convert heading to radians (0 is North/Up)
-      // Map logic: North is +Lat, East is +Lng.
-      // Standard trig: 0 is East. So we adjust.
-      // Heading 0 (North) -> dy > 0.
-      // We'll use standard navigation bearing: 0 = North, 90 = East.
-      const rad = (90 - heading) * (Math.PI / 180);
-
-      lat += Math.sin(rad) * speed; 
-      lng += Math.cos(rad) * speed;
-
-      const location: Location = { lat, lng, bearing: heading };
-      this.send(`trip-${tripId}`, 'location_update', location);
-    }, 1000); // 1Hz updates for smooth UI
+    if (error) {
+      console.error('Error updating location:', error);
+    }
   }
 }
 
-export const supabase = new MockSupabase();
+export const realSupabase = new RealSupabase();
