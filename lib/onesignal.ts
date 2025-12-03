@@ -1,38 +1,25 @@
-import OneSignal from 'react-onesignal';
-import { ONE_SIGNAL_APP_ID } from '../constants';
+// This utility now interfaces with the global OneSignal v16 SDK injected via index.html
 
-export async function initOneSignal() {
-  try {
-    // Safety check: Ensure OneSignal is defined before initializing
-    if (!OneSignal) {
-      console.warn("OneSignal library not available");
-      return;
+export function getPlayerId(): Promise<string | null> {
+  return new Promise((resolve) => {
+    if (window.OneSignalDeferred) {
+      window.OneSignalDeferred.push(async function(OneSignal: any) {
+        try {
+          const id = OneSignal.User.PushSubscription.id;
+          resolve(id || null);
+        } catch (e) {
+          console.warn("Error getting player ID", e);
+          resolve(null);
+        }
+      });
+    } else {
+      resolve(null);
     }
-
-    await OneSignal.init({
-      appId: ONE_SIGNAL_APP_ID,
-      allowLocalhostAsSecureOrigin: true,
-    });
-
-    // Safely check for the Slidedown property before calling it
-    // Newer SDK versions might change structure or it might be undefined on some platforms
-    if (OneSignal.Slidedown) {
-      await OneSignal.Slidedown.promptPush();
-    }
-  } catch (error) {
-    // Log error but do not crash the app
-    console.warn("OneSignal init error:", error);
-  }
+  });
 }
 
-export function getPlayerId() {
-  try {
-    if (OneSignal && OneSignal.User && OneSignal.User.PushSubscription) {
-       return OneSignal.User.PushSubscription.id;
-    }
-    return null;
-  } catch (e) {
-    console.warn("Could not get OneSignal Player ID", e);
-    return null;
-  }
+// Initialization is now handled in index.html script tag
+export async function initOneSignal() {
+  // No-op for compatibility with existing imports
+  console.log("OneSignal initialized via script tag");
 }

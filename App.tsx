@@ -11,7 +11,6 @@ import { Header } from './components/Header';
 import { RideRequestPanel } from './components/RideRequestPanel';
 import { TripStatusPanel } from './components/TripStatusPanel';
 import { Car, User as UserIcon } from 'lucide-react';
-import { initOneSignal } from './lib/onesignal';
 
 const App: React.FC = () => {
   // Global State
@@ -29,11 +28,6 @@ const App: React.FC = () => {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const rtcServiceRef = useRef<WebRTCService | null>(null);
-
-  // --- Effects ---
-  useEffect(() => {
-    initOneSignal();
-  }, []);
 
   // --- Auth Handlers ---
   const login = (role: UserRole) => {

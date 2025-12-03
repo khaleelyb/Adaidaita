@@ -30,29 +30,29 @@
         animation: bounce-slight 2s infinite;
       }
     </style>
-    <!-- OneSignal SDK Script -->
+    
+    <!-- OneSignal SDK v16 -->
     <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
     <script>
       window.OneSignalDeferred = window.OneSignalDeferred || [];
       OneSignalDeferred.push(async function(OneSignal) {
-        // Safe check for environment
-        try {
-          // Initialize logic is handled by react-onesignal in App code,
-          // but this script ensures global variables are present.
-        } catch (e) {
-          console.warn("OneSignal global init error", e);
-        }
+        await OneSignal.init({
+          appId: "c4cf2adf-2e4c-44d8-abd0-d7536ba28fd6",
+          notifyButton: {
+            enable: true,
+          },
+          allowLocalhostAsSecureOrigin: true,
+        });
       });
     </script>
 <script type="importmap">
 {
   "imports": {
-    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.86.0",
-    "react/": "https://aistudiocdn.com/react@^19.2.1/",
     "react": "https://aistudiocdn.com/react@^19.2.1",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
-    "react-onesignal": "https://aistudiocdn.com/react-onesignal@^3.4.0"
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.86.0"
   }
 }
 </script>

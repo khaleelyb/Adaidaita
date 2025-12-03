@@ -49,3 +49,11 @@ export interface WebRTCMessage {
   type: 'offer' | 'answer' | 'candidate' | 'end';
   payload: any;
 }
+
+// Add global OneSignal type definition
+declare global {
+  interface Window {
+    OneSignalDeferred: any[];
+    OneSignal: any;
+  }
+}
