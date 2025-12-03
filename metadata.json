@@ -1,0 +1,9 @@
+{
+  "name": "Adaidaita",
+  "description": "A ride-hailing app with WebRTC video calling, live GPS tracking, and instant ride matching.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
