@@ -1,5 +1,5 @@
 import { ICE_SERVERS } from '../constants';
-import { supabase } from './supabase';
+import { supabase } from './Supabase';
 
 export class WebRTCService {
   private peerConnection: RTCPeerConnection | null = null;
