@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, Trip, TripStatus, User } from './types';
 import { MOCK_DRIVER_USER, MOCK_RIDER_USER } from './constants';
-import { supabase } from './services/realSupabase';
+import { supabase } from './services/Supabase';
 import { WebRTCService } from './services/webrtcService';
 import { Button } from './components/Button';
 import { MapVisualizer } from './components/MapVisualizer';
