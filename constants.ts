@@ -1,3 +1,5 @@
+import { UserRole } from './types';
+
 export const APP_NAME = "Adaidaita";
 
 // Median.co / WebRTC TURN Configuration
@@ -22,7 +24,7 @@ export const MOCK_RIDER_USER = {
   id: 'rider-123',
   email: 'rider@adaidaita.com',
   name: 'Alice Rider',
-  role: 'RIDER',
+  role: UserRole.RIDER,
   avatarUrl: 'https://picsum.photos/200'
 };
 
@@ -30,7 +32,7 @@ export const MOCK_DRIVER_USER = {
   id: 'driver-456',
   email: 'driver@adaidaita.com',
   name: 'Bob Driver',
-  role: 'DRIVER',
+  role: UserRole.DRIVER,
   vehicleModel: 'Toyota Corolla',
   vehiclePlate: 'KAN-552',
   rating: 4.8,
