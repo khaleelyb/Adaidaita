@@ -11,7 +11,7 @@ class SupabaseService {
   private locationInterval: any = null;
 
   subscribe(channelName: string, callback: SubscriptionCallback) {
-    const tripId = channelName.replace('trip-', '');
+    const tripId = channelName.replace('trip-', '').replace('call-', '');
     
     const channel = client
       .channel(channelName)
@@ -90,7 +90,7 @@ class SupabaseService {
       throw error;
     }
 
-    // Auto-assign driver after 3 seconds (simulating driver acceptance)
+    // Auto-assign driver after 3 seconds
     setTimeout(() => this.autoAssignDriver(data.id), 3000);
 
     return this.mapTrip(data);
@@ -109,7 +109,6 @@ class SupabaseService {
       return null;
     }
 
-    // Stop location updates when trip is completed
     if (status === TripStatus.COMPLETED || status === TripStatus.IDLE) {
       this.stopLocationUpdates();
     }
@@ -133,7 +132,7 @@ class SupabaseService {
   }
 
   private async autoAssignDriver(tripId: string) {
-    const driverId = '22222222-2222-2222-2222-222222222222'; // Bob Driver
+    const driverId = '22222222-2222-2222-2222-222222222222';
     
     const { error } = await client
       .from('trips')
@@ -150,7 +149,6 @@ class SupabaseService {
 
     console.log('✅ Driver assigned to trip:', tripId);
 
-    // Initialize driver location and start updates
     await this.initializeDriverLocation(driverId);
     this.startLocationUpdates(driverId);
   }
@@ -170,8 +168,6 @@ class SupabaseService {
 
     if (error) {
       console.error('Error initializing driver location:', error);
-    } else {
-      console.log('✅ Driver location initialized');
     }
   }
 
@@ -183,8 +179,6 @@ class SupabaseService {
     let lat = INITIAL_MAP_CENTER.lat - 0.002;
     let lng = INITIAL_MAP_CENTER.lng - 0.002;
     let heading = 45;
-
-    console.log('🚗 Starting driver location updates...');
 
     this.locationInterval = setInterval(async () => {
       const speed = 0.00015;
@@ -214,7 +208,6 @@ class SupabaseService {
     if (this.locationInterval) {
       clearInterval(this.locationInterval);
       this.locationInterval = null;
-      console.log('🛑 Stopped driver location updates');
     }
   }
 
@@ -235,7 +228,7 @@ class SupabaseService {
     };
   }
 
-  // WebRTC Signaling Support
+  // WebRTC Signaling
   send(channelName: string, event: string, payload: any) {
     if (channelName.startsWith('call-')) {
       const tripId = channelName.replace('call-', '');
