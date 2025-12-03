@@ -1,5 +1,5 @@
 import { ICE_SERVERS } from '../constants';
-import { supabase } from './supabase';
+import { supabase } from './supabase';  // ← Changed from mockSupabase
 
 export class WebRTCService {
   private peerConnection: RTCPeerConnection | null = null;
@@ -50,7 +50,17 @@ export class WebRTCService {
       }
     };
 
-    // 6. Setup Signaling Listeners
+    // 6. Connection state handling
+    this.peerConnection.onconnectionstatechange = () => {
+      console.log('Connection state:', this.peerConnection?.connectionState);
+      if (this.peerConnection?.connectionState === 'disconnected' ||
+          this.peerConnection?.connectionState === 'failed' ||
+          this.peerConnection?.connectionState === 'closed') {
+        this.endCall();
+      }
+    };
+
+    // 7. Setup Signaling Listeners
     supabase.subscribe(`call-${this.tripId}`, async ({ event, payload }) => {
       if (!this.peerConnection) return;
 
@@ -68,7 +78,6 @@ export class WebRTCService {
         } 
         else if (event === 'candidate') {
           const candidate = new RTCIceCandidate(payload.candidate);
-          // Check if remote description is set before adding.
           if (this.peerConnection.remoteDescription && this.peerConnection.remoteDescription.type) {
             try {
               await this.peerConnection.addIceCandidate(candidate);
@@ -76,19 +85,18 @@ export class WebRTCService {
               console.error("Error adding ice candidate", e);
             }
           } else {
-            // Queue candidate if remote description is not yet set
             this.candidateQueue.push(candidate);
           }
         }
         else if (event === 'end') {
-          this.endCall(false); // End locally without sending signal
+          this.endCall(false);
         }
       } catch (err) {
         console.error("Error handling WebRTC event:", event, err);
       }
     });
 
-    // 7. If Caller, Create Offer
+    // 8. If Caller, Create Offer
     if (isCaller) {
       const offer = await this.peerConnection.createOffer();
       await this.peerConnection.setLocalDescription(offer);
@@ -105,7 +113,6 @@ export class WebRTCService {
       const candidate = this.candidateQueue.shift();
       if (candidate) {
         try {
-          // Critical Fix: Double check remote description exists before adding queued candidate
           if (this.peerConnection.remoteDescription) {
             await this.peerConnection.addIceCandidate(candidate);
           } else {
