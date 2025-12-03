@@ -16,6 +16,8 @@ export const SUPABASE_CONFIG = {
   anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxdmhpb3JxeGlvbWppbmxuZ3R2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODM3NzcsImV4cCI6MjA4MDM1OTc3N30.hbJ0a5JIQJ4RFR8E5U9P4dwPChpB9XJzl4a_NjkOnBA"
 };
 
+export const ONE_SIGNAL_APP_ID = "c4cf2adf-2e4c-44d8-abd0-d7536ba28fd6";
+
 export const MOCK_RIDER_USER = {
   id: 'rider-123',
   email: 'rider@adaidaita.com',
