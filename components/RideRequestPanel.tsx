@@ -1,6 +1,4 @@
-
 import React from 'react';
-import { MapPin, Navigation } from 'lucide-react';
 import { Button } from './Button';
 
 interface RideRequestPanelProps {

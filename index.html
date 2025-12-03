@@ -22,17 +22,37 @@
         height: 100%;
         z-index: 0;
       }
+      @keyframes bounce-slight {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-5px); }
+      }
+      .animate-bounce-slight {
+        animation: bounce-slight 2s infinite;
+      }
     </style>
-  <script type="importmap">
+    <!-- OneSignal SDK Script -->
+    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+    <script>
+      window.OneSignalDeferred = window.OneSignalDeferred || [];
+      OneSignalDeferred.push(async function(OneSignal) {
+        // Safe check for environment
+        try {
+          // Initialize logic is handled by react-onesignal in App code,
+          // but this script ensures global variables are present.
+        } catch (e) {
+          console.warn("OneSignal global init error", e);
+        }
+      });
+    </script>
+<script type="importmap">
 {
   "imports": {
-    "react/": "https://esm.sh/react@18.3.1/",
-    "react": "https://esm.sh/react@18.3.1",
-    "react-dom/": "https://esm.sh/react-dom@18.3.1/",
-    "react-dom": "https://esm.sh/react-dom@18.3.1",
-    "lucide-react": "https://esm.sh/lucide-react@0.344.0",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.7",
-    "react-onesignal": "https://esm.sh/react-onesignal@9.1.1"
+    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.86.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "react-onesignal": "https://aistudiocdn.com/react-onesignal@^3.4.0"
   }
 }
 </script>
