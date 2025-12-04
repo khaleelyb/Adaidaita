@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, Trip, TripStatus, User } from './types';
 import { supabase } from './services/supabase';
@@ -17,66 +16,7 @@ const App: React.FC = () => {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  
-  // ... rest of your state ...
-
-  // Check for existing session on mount
-  useEffect(() => {
-    checkSession();
-    
-    // Listen for auth changes
-    const { data: { subscription } } = authService.onAuthStateChange((user) => {
-      setCurrentUser(user);
-      setIsLoading(false);
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  const checkSession = async () => {
-    try {
-      const user = await authService.getCurrentUser();
-      setCurrentUser(user);
-    } catch (error) {
-      console.error('Error checking session:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const logout = async () => {
-    await authService.signOut();
-    setCurrentUser(null);
-    setCurrentTrip(null);
-    setIsCallModalOpen(false);
-  };
-
-  // Loading state
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-zinc-900 flex items-center justify-center">
-        <div className="text-white text-xl">Loading...</div>
-      </div>
-    );
-  }
-
-  // Show auth modal if not logged in
-  if (!currentUser) {
-    return <AuthModal onSuccess={checkSession} />;
-  }
-
-  // ... rest of your App component stays the same ...
-};
-
-export default App;
-
-const App: React.FC = () => {
-  // Global State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   
   // UI State
   const [pickupInput, setPickupInput] = useState('Central Market');
@@ -91,14 +31,40 @@ const App: React.FC = () => {
   const rtcServiceRef = useRef<WebRTCService | null>(null);
 
   // --- Auth Handlers ---
-  const login = (role: UserRole) => {
-    setCurrentUser(role === UserRole.RIDER ? MOCK_RIDER_USER : MOCK_DRIVER_USER);
+  useEffect(() => {
+    checkSession();
+    
+    // Listen for auth changes
+    const { data: { subscription } } = authService.onAuthStateChange((user) => {
+      setCurrentUser(user);
+      setIsAuthLoading(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const checkSession = async () => {
+    try {
+      const user = await authService.getCurrentUser();
+      setCurrentUser(user);
+    } catch (error) {
+      console.error('Error checking session:', error);
+    } finally {
+      setIsAuthLoading(false);
+    }
   };
 
-  const logout = () => {
-    setCurrentUser(null);
-    setCurrentTrip(null);
-    setIsCallModalOpen(false);
+  const logout = async () => {
+    try {
+      await authService.signOut();
+      setCurrentUser(null);
+      setCurrentTrip(null);
+      setIsCallModalOpen(false);
+    } catch (error) {
+      console.error('Error logging out:', error);
+    }
   };
 
   // --- Trip Handlers ---
@@ -106,36 +72,46 @@ const App: React.FC = () => {
     if (!currentUser) return;
     setIsRequesting(true);
     
-    // Simulate API call
-    const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
-    setCurrentTrip(trip);
-    setIsRequesting(false);
+    try {
+      // Create trip in Supabase
+      const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
+      setCurrentTrip(trip);
 
-    // Listen for updates
-    supabase.subscribe(`trip-${trip.id}`, (data) => {
-      if (data.event === 'trip_accepted') {
-        setCurrentTrip(prev => ({ ...data.payload.trip }));
-      } else if (data.event === 'location_update') {
-        setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
-      } else if (data.event === 'status_change') {
-         setCurrentTrip(prev => prev ? ({ ...prev, status: data.payload.status }) : null);
-      }
-    });
+      // Listen for updates
+      supabase.subscribe(`trip-${trip.id}`, (data) => {
+        if (data.event === 'trip_accepted') {
+          setCurrentTrip(prev => ({ ...data.payload.trip }));
+        } else if (data.event === 'location_update') {
+          setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
+        } else if (data.event === 'status_change') {
+          setCurrentTrip(prev => prev ? ({ ...prev, status: data.payload.status }) : null);
+        }
+      });
+    } catch (error) {
+      console.error('Error requesting trip:', error);
+    } finally {
+      setIsRequesting(false);
+    }
   };
 
   const updateTripStatus = async (status: TripStatus) => {
-    if (currentTrip) {
-      if (status === TripStatus.IDLE) {
-         setCurrentTrip(null);
-         return;
-      }
-      if (status === TripStatus.COMPLETED) {
-        // Simple completion logic
-        setCurrentTrip(null);
-        return;
-      }
+    if (!currentTrip) return;
+
+    if (status === TripStatus.IDLE) {
+      setCurrentTrip(null);
+      return;
+    }
+    
+    if (status === TripStatus.COMPLETED) {
+      setCurrentTrip(null);
+      return;
+    }
+
+    try {
       await supabase.updateTripStatus(currentTrip.id, status);
       setCurrentTrip(prev => prev ? ({ ...prev, status }) : null);
+    } catch (error) {
+      console.error('Error updating trip status:', error);
     }
   };
 
@@ -166,40 +142,32 @@ const App: React.FC = () => {
     } catch (err) {
       console.error("Failed to start call", err);
       setIsCallModalOpen(false);
+      setIsCalling(false);
     }
   };
 
   const endCall = () => {
     rtcServiceRef.current?.endCall();
     setIsCallModalOpen(false);
+    setLocalStream(null);
+    setRemoteStream(null);
   };
 
-  // --- Render Unauthenticated ---
-  if (!currentUser) {
+  // --- Loading State ---
+  if (isAuthLoading) {
     return (
-      <div className="min-h-screen bg-zinc-900 flex flex-col items-center justify-center p-6 text-white relative overflow-hidden font-sans">
-        <div className="absolute top-0 left-0 w-full h-full opacity-10 bg-[radial-gradient(#22c55e_1px,transparent_1px)] [background-size:20px_20px]"></div>
-        <div className="absolute w-[500px] h-[500px] bg-emerald-600 rounded-full blur-[150px] -top-32 -left-32 opacity-30 animate-pulse"></div>
-        
-        <div className="z-10 w-full max-w-sm space-y-10">
-          <div className="text-center space-y-2">
-            <h1 className="text-6xl font-bold tracking-tighter bg-gradient-to-br from-white to-emerald-200 bg-clip-text text-transparent">
-              Adaidaita
-            </h1>
-            <p className="text-zinc-400 font-medium tracking-wide">Secure Rides. Private Calls.</p>
-          </div>
-
-          <div className="space-y-4">
-             <Button onClick={() => login(UserRole.RIDER)} fullWidth className="h-16 text-lg bg-white text-zinc-900 hover:bg-zinc-100 shadow-xl shadow-white/5 border-0">
-               <UserIcon className="w-5 h-5 mr-3" /> Rider Login
-             </Button>
-             <Button onClick={() => login(UserRole.DRIVER)} fullWidth className="h-16 text-lg bg-emerald-900/50 text-white hover:bg-emerald-900 border border-emerald-700/50">
-               <Car className="w-5 h-5 mr-3" /> Driver Login
-             </Button>
-          </div>
+      <div className="min-h-screen bg-zinc-900 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-white text-xl font-medium">Loading Adaidaita...</p>
         </div>
       </div>
     );
+  }
+
+  // --- Render Unauthenticated (Show Auth Modal) ---
+  if (!currentUser) {
+    return <AuthModal onSuccess={checkSession} />;
   }
 
   // --- Render Authenticated App ---
