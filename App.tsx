@@ -19,7 +19,7 @@ const App: React.FC = () => {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   
   // UI State
-  const [pickupInput, setPickupInput] = useState('Central Market');
+  const [pickupInput, setPickupInput] = useState('Current Location');
   const [destinationInput, setDestinationInput] = useState('');
   const [isRequesting, setIsRequesting] = useState(false);
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
