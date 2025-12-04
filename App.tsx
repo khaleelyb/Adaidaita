@@ -68,7 +68,7 @@ const App: React.FC = () => {
         setIsAuthLoading(false);
         setCurrentUser(null);
       }
-    }, 8000); // Increased to 8 seconds for slower connections
+    }, 5000); // 5 seconds timeout
 
     checkSession();
     
@@ -91,6 +91,7 @@ const App: React.FC = () => {
 
   const checkSession = async () => {
     if (!isOnline) {
+      console.log('Offline detected, skipping session check');
       setIsAuthLoading(false);
       return;
     }
@@ -99,7 +100,7 @@ const App: React.FC = () => {
       console.log('Checking session...');
       const user = await authService.getCurrentUser();
       if (isMountedRef.current) {
-        console.log('Current user:', user);
+        console.log('Session check result:', user ? 'User found' : 'No user');
         setCurrentUser(user);
       }
     } catch (error) {
