@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UserRole } from '../types';
 import { authService } from '../services/auth';
 import { Button } from './Button';
@@ -16,6 +16,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,11 +36,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
         await authService.signUp(email, password, name, role);
         setError('Account created! Check your email to confirm (or login if confirmation disabled).');
       }
-      onSuccess();
+      
+      if (isMounted.current) {
+        onSuccess();
+      }
     } catch (err: any) {
-      setError(err.message || 'Authentication failed');
+      console.error("Auth error:", err);
+      if (isMounted.current) {
+        setError(err.message || 'Authentication failed. Please check your connection.');
+      }
     } finally {
-      setLoading(false);
+      if (isMounted.current) {
+        setLoading(false);
+      }
     }
   };
 
