@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#059669" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    
+    <!-- SEO Meta Tags -->
+    <title>Adaidaita - Secure Ride Hailing with Video Calling</title>
+    <meta name="description" content="Book rides with real-time tracking, video calling, and instant driver matching. Secure, fast, and reliable transportation." />
+    <meta name="keywords" content="ride hailing, taxi, transportation, video call, live tracking, secure rides" />
+    
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Adaidaita - Secure Ride Hailing" />
+    <meta property="og:description" content="Book rides with real-time tracking and video calling" />
+    <meta property="og:type" content="website" />
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='45' fill='%23059669'/%3E%3Cpath d='M30 40 L50 25 L70 40 L70 75 L30 75 Z' fill='white'/%3E%3C/svg%3E" />
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            spacing: {
+              'safe': 'env(safe-area-inset-bottom)',
+            }
+          }
+        }
+      }
+    </script>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+      * {
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+      }
+      
+      body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background-color: #f4f4f5;
+        overscroll-behavior: none;
+        overflow: hidden;
+        position: fixed;
+        width: 100%;
+        height: 100%;
+      }
+      
+      /* Safe area support for notched devices */
+      .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      
+      /* Hide scrollbar */
+      ::-webkit-scrollbar {
+        width: 0px;
+        background: transparent;
+      }
+      
+      /* Leaflet map styles */
+      .leaflet-container {
+        width: 100%;
+        height: 100%;
+        z-index: 0;
+        font-family: 'Inter', sans-serif;
+      }
+      
+      .leaflet-control-attribution {
+        font-size: 9px;
+        background: rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(10px);
+        border-radius: 8px;
+        padding: 4px 8px;
+      }
+      
+      /* Custom marker styles */
+      .custom-marker-icon {
+        background: transparent;
+        border: none;
+      }
+      
+      /* Smooth animations */
+      @keyframes bounce-slight {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-5px); }
+      }
+      
+      .animate-bounce-slight {
+        animation: bounce-slight 2s infinite;
+      }
+      
+      /* Loading skeleton */
+      @keyframes shimmer {
+        0% { background-position: -1000px 0; }
+        100% { background-position: 1000px 0; }
+      }
+      
+      .skeleton {
+        animation: shimmer 2s infinite;
+        background: linear-gradient(to right, #f0f0f0 8%, #e0e0e0 18%, #f0f0f0 33%);
+        background-size: 1000px 100%;
+      }
+      
+      /* Prevent text selection on buttons */
+      button {
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      
+      /* Improve touch interactions */
+      input, textarea, select {
+        font-size: 16px; /* Prevents iOS zoom on focus */
+      }
+      
+      /* Custom scrollbar for panels */
+      .custom-scroll::-webkit-scrollbar {
+        width: 4px;
+      }
+      
+      .custom-scroll::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      
+      .custom-scroll::-webkit-scrollbar-thumb {
+        background: #d4d4d8;
+        border-radius: 2px;
+      }
+      
+      /* Pull to refresh indicator */
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      
+      /* Haptic feedback simulation */
+      @media (hover: none) {
+        button:active {
+          transform: scale(0.98);
+        }
+      }
+    </style>
+    
+    <!-- OneSignal SDK v16 -->
+    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+    <script>
+      window.OneSignalDeferred = window.OneSignalDeferred || [];
+      OneSignalDeferred.push(async function(OneSignal) {
+        await OneSignal.init({
+          appId: "c4cf2adf-2e4c-44d8-abd0-d7536ba28fd6",
+          notifyButton: {
+            enable: true,
+          },
+          allowLocalhostAsSecureOrigin: true,
+        });
+      });
+    </script>
+    
+    <!-- Service Worker Registration -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/OneSignalSDKWorker.js')
+            .then(registration => console.log('SW registered:', registration))
+            .catch(error => console.log('SW registration failed:', error));
+        });
+      }
+    </script>
+    
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.86.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    
+    <!-- Loading fallback -->
+    <noscript>
+      <div style="display: flex; align-items: center; justify-content: center; height: 100vh; font-family: Inter, sans-serif; background: #18181b; color: white;">
+        <div style="text-align: center;">
+          <h1 style="font-size: 2rem; margin-bottom: 1rem;">JavaScript Required</h1>
+          <p>Please enable JavaScript to use Adaidaita.</p>
+        </div>
+      </div>
+    </noscript>
+    
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>
