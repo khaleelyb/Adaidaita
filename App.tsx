@@ -19,7 +19,7 @@ const App: React.FC = () => {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   
   // UI State
-  const [pickupInput, setPickupInput] = useState('Current Location');
+  const [pickupInput, setPickupInput] = useState('Central Market');
   const [destinationInput, setDestinationInput] = useState('');
   const [isRequesting, setIsRequesting] = useState(false);
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
@@ -47,10 +47,13 @@ const App: React.FC = () => {
 
   const checkSession = async () => {
     try {
+      console.log('Checking session...');
       const user = await authService.getCurrentUser();
+      console.log('Current user:', user);
       setCurrentUser(user);
     } catch (error) {
       console.error('Error checking session:', error);
+      setCurrentUser(null);
     } finally {
       setIsAuthLoading(false);
     }
