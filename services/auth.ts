@@ -15,7 +15,8 @@ export class AuthService {
           name,
           role,
           avatar_url: `https://i.pravatar.cc/150?u=${email}`
-        }
+        },
+        emailRedirectTo: window.location.origin
       }
     });
 
@@ -48,32 +49,102 @@ export class AuthService {
 
   // Get current user profile from database
   async getCurrentUser(): Promise<User | null> {
-    const session = await this.getSession();
-    if (!session?.user) return null;
+    try {
+      const session = await this.getSession();
+      if (!session?.user) {
+        console.log('No active session');
+        return null;
+      }
 
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('auth_user_id', session.user.id)
-      .single();
+      console.log('Fetching user profile for auth_user_id:', session.user.id);
 
-    if (error || !data) return null;
+      // First, try to get user by auth_user_id
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('auth_user_id', session.user.id)
+        .single();
 
-    return {
-      id: data.id,
-      email: data.email,
-      name: data.name,
-      role: data.role as UserRole,
-      avatarUrl: data.avatar_url,
-      vehicleModel: data.vehicle_model,
-      vehiclePlate: data.vehicle_plate,
-      rating: data.rating
-    };
+      if (error) {
+        console.error('Error fetching user profile:', error);
+        
+        // If user doesn't exist in users table, create it
+        if (error.code === 'PGRST116') {
+          console.log('User profile not found, creating one...');
+          return await this.createUserProfile(session.user);
+        }
+        
+        return null;
+      }
+
+      if (!data) {
+        console.log('No user data found');
+        return null;
+      }
+
+      console.log('User profile fetched:', data);
+
+      return {
+        id: data.id,
+        email: data.email,
+        name: data.name,
+        role: data.role as UserRole,
+        avatarUrl: data.avatar_url,
+        vehicleModel: data.vehicle_model,
+        vehiclePlate: data.vehicle_plate,
+        rating: data.rating
+      };
+    } catch (err) {
+      console.error('Unexpected error in getCurrentUser:', err);
+      return null;
+    }
+  }
+
+  // Create user profile if it doesn't exist
+  private async createUserProfile(authUser: any): Promise<User | null> {
+    try {
+      const metadata = authUser.user_metadata || {};
+      
+      const { data, error } = await supabase
+        .from('users')
+        .insert({
+          auth_user_id: authUser.id,
+          email: authUser.email,
+          name: metadata.name || authUser.email?.split('@')[0] || 'User',
+          role: metadata.role || UserRole.RIDER,
+          avatar_url: metadata.avatar_url || `https://i.pravatar.cc/150?u=${authUser.email}`
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error creating user profile:', error);
+        return null;
+      }
+
+      console.log('User profile created:', data);
+
+      return {
+        id: data.id,
+        email: data.email,
+        name: data.name,
+        role: data.role as UserRole,
+        avatarUrl: data.avatar_url,
+        vehicleModel: data.vehicle_model,
+        vehiclePlate: data.vehicle_plate,
+        rating: data.rating
+      };
+    } catch (err) {
+      console.error('Error in createUserProfile:', err);
+      return null;
+    }
   }
 
   // Listen to auth state changes
   onAuthStateChange(callback: (user: User | null) => void) {
     return supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state changed:', event, session?.user?.email);
+      
       if (session?.user) {
         const user = await this.getCurrentUser();
         callback(user);
