@@ -1,8 +1,7 @@
-import { createClient, RealtimeChannel } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG, INITIAL_MAP_CENTER } from '../constants';
-import { Trip, TripStatus, Location } from '../types';
-
-const client = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+import { RealtimeChannel } from '@supabase/supabase-js';
+import { supabaseClient } from './supabaseClient';
+import { INITIAL_MAP_CENTER } from '../constants';
+import { Trip, TripStatus } from '../types';
 
 type SubscriptionCallback = (payload: any) => void;
 
@@ -13,7 +12,7 @@ class SupabaseService {
   subscribe(channelName: string, callback: SubscriptionCallback) {
     const tripId = channelName.replace('trip-', '').replace('call-', '');
     
-    const channel = client
+    const channel = supabaseClient
       .channel(channelName)
       .on(
         'postgres_changes',
@@ -61,20 +60,37 @@ class SupabaseService {
       unsubscribe: () => {
         const ch = this.channels.get(channelName);
         if (ch) {
-          client.removeChannel(ch);
+          supabaseClient.removeChannel(ch);
           this.channels.delete(channelName);
         }
       }
     };
   }
 
-  async createTrip(riderId: string, pickup: string, destination: string): Promise<Trip> {
+  async createTrip(riderProfileId: string, pickup: string, destination: string): Promise<Trip> {
     const fare = Math.floor(Math.random() * 2000) + 500;
     
-    const { data, error } = await client
+    // Get the actual authenticated user ID
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    
+    if (!session?.user) {
+      throw new Error("You must be logged in to request a ride.");
+    }
+
+    console.log("Creating trip...", {
+      authUserId: session.user.id,
+      profileId: riderProfileId
+    });
+
+    // Try inserting with the Auth User ID first (Common RLS pattern: auth.uid() = rider_id)
+    // We ignore the passed 'riderProfileId' for the INSERT to satisfy potential RLS policies 
+    // that check against auth.uid(). 
+    // If the database actually requires the Profile ID, this might need a schema adjustment or 
+    // the RLS policy should be: rider_id IN (select id from users where auth_user_id = auth.uid())
+    const { data, error } = await supabaseClient
       .from('trips')
       .insert({
-        rider_id: riderId,
+        rider_id: session.user.id, // Using Auth ID to pass RLS
         pickup_location: pickup,
         destination_location: destination,
         status: TripStatus.SEARCHING,
@@ -86,7 +102,32 @@ class SupabaseService {
       .single();
 
     if (error) {
-      console.error('Error creating trip:', error);
+      console.error('Error creating trip with Auth ID:', error);
+      
+      // Fallback: If FK violation (e.g. rider_id must be profile ID), try using profile ID
+      // This only works if RLS allows it.
+      if (error.code === '23503') { // Foreign key violation
+         console.warn("Auth ID failed FK check. Retrying with Profile ID...");
+         const { data: retryData, error: retryError } = await supabaseClient
+          .from('trips')
+          .insert({
+            rider_id: riderProfileId,
+            pickup_location: pickup,
+            destination_location: destination,
+            status: TripStatus.SEARCHING,
+            fare,
+            pickup_lat: INITIAL_MAP_CENTER.lat,
+            pickup_lng: INITIAL_MAP_CENTER.lng
+          })
+          .select()
+          .single();
+          
+          if (retryError) throw retryError;
+          // Auto-assign driver after 3 seconds
+          setTimeout(() => this.autoAssignDriver(retryData.id), 3000);
+          return this.mapTrip(retryData);
+      }
+
       throw error;
     }
 
@@ -97,7 +138,7 @@ class SupabaseService {
   }
 
   async updateTripStatus(tripId: string, status: TripStatus): Promise<Trip | null> {
-    const { data, error } = await client
+    const { data, error } = await supabaseClient
       .from('trips')
       .update({ status })
       .eq('id', tripId)
@@ -117,7 +158,7 @@ class SupabaseService {
   }
 
   private async getTripById(tripId: string): Promise<Trip | null> {
-    const { data, error } = await client
+    const { data, error } = await supabaseClient
       .from('trips')
       .select('*')
       .eq('id', tripId)
@@ -132,9 +173,11 @@ class SupabaseService {
   }
 
   private async autoAssignDriver(tripId: string) {
+    // In a real app, this would be backend logic finding an available driver
+    // For this demo, we'll try to find an existing driver or use a placeholder
     const driverId = '22222222-2222-2222-2222-222222222222';
     
-    const { error } = await client
+    const { error } = await supabaseClient
       .from('trips')
       .update({
         driver_id: driverId,
@@ -157,7 +200,7 @@ class SupabaseService {
     const startLat = INITIAL_MAP_CENTER.lat - 0.002;
     const startLng = INITIAL_MAP_CENTER.lng - 0.002;
 
-    const { error } = await client
+    const { error } = await supabaseClient
       .from('driver_locations')
       .upsert({
         driver_id: driverId,
@@ -189,7 +232,7 @@ class SupabaseService {
       lat += Math.sin(rad) * speed;
       lng += Math.cos(rad) * speed;
 
-      const { error } = await client
+      const { error } = await supabaseClient
         .from('driver_locations')
         .upsert({
           driver_id: driverId,
@@ -233,7 +276,7 @@ class SupabaseService {
     if (channelName.startsWith('call-')) {
       const tripId = channelName.replace('call-', '');
       
-      client.from('call_signals').insert({
+      supabaseClient.from('call_signals').insert({
         trip_id: tripId,
         signal_type: event,
         signal_data: payload,
