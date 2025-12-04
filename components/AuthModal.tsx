@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { UserRole } from '../types';
 import { authService } from '../services/auth';
 import { Button } from './Button';
-import { Mail, Lock, User as UserIcon, Car } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, Car, AlertCircle, CheckCircle } from 'lucide-react';
 
 interface AuthModalProps {
   onSuccess: () => void;
@@ -16,6 +16,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -24,32 +25,80 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
     };
   }, []);
 
+  // Test credentials helper
+  const fillTestCredentials = (userType: 'rider' | 'driver') => {
+    if (userType === 'rider') {
+      setEmail('alice@adaidaita.com');
+      setPassword('password123');
+    } else {
+      setEmail('bob@adaidaita.com');
+      setPassword('password123');
+    }
+    setError('');
+    setSuccess('Test credentials filled. You can now sign in.');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setSuccess('');
     setLoading(true);
 
+    // Validation
+    if (!email.trim() || !password.trim()) {
+      setError('Please fill in all fields');
+      setLoading(false);
+      return;
+    }
+
+    if (!isLogin && !name.trim()) {
+      setError('Please enter your name');
+      setLoading(false);
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
+      setLoading(false);
+      return;
+    }
+
     try {
+      console.log(`[AuthModal] Attempting ${isLogin ? 'sign in' : 'sign up'}...`);
+      
       if (isLogin) {
         await authService.signIn(email, password);
+        if (isMounted.current) {
+          setSuccess('Sign in successful! Loading your account...');
+          setTimeout(() => {
+            if (isMounted.current) onSuccess();
+          }, 500);
+        }
       } else {
         await authService.signUp(email, password, name, role);
-        setError('Account created! Check your email to confirm (or login if confirmation disabled).');
-      }
-      
-      if (isMounted.current) {
-        onSuccess();
+        if (isMounted.current) {
+          setSuccess('Account created successfully! You can now sign in.');
+          setIsLogin(true);
+          setPassword('');
+        }
       }
     } catch (err: any) {
-      console.error("Auth error:", err);
+      console.error('[AuthModal] Auth error:', err);
       if (isMounted.current) {
-        setError(err.message || 'Authentication failed. Please check your connection.');
+        const errorMessage = err.message || 'Authentication failed. Please try again.';
+        setError(errorMessage);
       }
     } finally {
       if (isMounted.current) {
         setLoading(false);
       }
     }
+  };
+
+  const toggleMode = () => {
+    setIsLogin(!isLogin);
+    setError('');
+    setSuccess('');
   };
 
   return (
@@ -115,7 +164,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
                     onChange={(e) => setName(e.target.value)}
                     className="w-full bg-zinc-900/50 border border-zinc-700 rounded-xl pl-12 pr-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     placeholder="John Doe"
-                    required
+                    required={!isLogin}
                   />
                 </div>
               </div>
@@ -154,36 +203,74 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
               </div>
             </div>
 
-            {/* Error/Success Message */}
+            {/* Success Message */}
+            {success && (
+              <div className="bg-emerald-500/10 border border-emerald-500/50 rounded-xl p-3 text-sm flex items-start animate-in fade-in slide-in-from-top duration-200">
+                <CheckCircle size={18} className="text-emerald-400 mr-2 flex-shrink-0 mt-0.5" />
+                <span className="text-emerald-400">{success}</span>
+              </div>
+            )}
+
+            {/* Error Message */}
             {error && (
-              <div className={`border rounded-xl p-3 text-sm ${
-                error.includes('created') 
-                  ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
-                  : 'bg-red-500/10 border-red-500/50 text-red-400'
-              }`}>
-                {error}
+              <div className="bg-red-500/10 border border-red-500/50 rounded-xl p-3 text-sm flex items-start animate-in fade-in slide-in-from-top duration-200">
+                <AlertCircle size={18} className="text-red-400 mr-2 flex-shrink-0 mt-0.5" />
+                <span className="text-red-400">{error}</span>
               </div>
             )}
 
             {/* Submit Button */}
             <Button type="submit" fullWidth isLoading={loading} className="h-12 text-base">
-              {isLogin ? 'Sign In' : 'Create Account'}
+              {loading 
+                ? (isLogin ? 'Signing In...' : 'Creating Account...') 
+                : (isLogin ? 'Sign In' : 'Create Account')
+              }
             </Button>
 
             {/* Toggle Login/Signup */}
             <div className="text-center">
               <button
                 type="button"
-                onClick={() => {
-                  setIsLogin(!isLogin);
-                  setError('');
-                }}
+                onClick={toggleMode}
                 className="text-sm text-zinc-400 hover:text-emerald-400 transition-colors"
+                disabled={loading}
               >
                 {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
               </button>
             </div>
           </form>
+
+          {/* Test Credentials */}
+          {isLogin && (
+            <div className="mt-6 pt-6 border-t border-zinc-700">
+              <p className="text-xs text-zinc-500 mb-3 text-center">Quick test with demo accounts:</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => fillTestCredentials('rider')}
+                  className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-xs font-medium transition-colors active:scale-95"
+                  disabled={loading}
+                >
+                  Test as Rider
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fillTestCredentials('driver')}
+                  className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-xs font-medium transition-colors active:scale-95"
+                  disabled={loading}
+                >
+                  Test as Driver
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Debug Info */}
+        <div className="text-center">
+          <p className="text-xs text-zinc-600">
+            Having trouble? Check the browser console for details (F12)
+          </p>
         </div>
       </div>
     </div>
