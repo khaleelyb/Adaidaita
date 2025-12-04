@@ -17,6 +17,7 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   
   // UI State
   const [pickupInput, setPickupInput] = useState('Central Market');
@@ -29,35 +30,66 @@ const App: React.FC = () => {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const rtcServiceRef = useRef<WebRTCService | null>(null);
+  const authCheckRef = useRef(false);
 
   // --- Auth Handlers ---
   useEffect(() => {
-    checkSession();
-    
+    // Prevent double execution in development mode
+    if (authCheckRef.current) return;
+    authCheckRef.current = true;
+
+    let timeoutId: NodeJS.Timeout;
+    let isMounted = true;
+
+    const initAuth = async () => {
+      try {
+        console.log('🔐 Initializing authentication...');
+        
+        // Set timeout to prevent infinite loading
+        timeoutId = setTimeout(() => {
+          if (isMounted) {
+            console.warn('⚠️ Auth check timed out after 5 seconds');
+            setAuthError('Connection timeout. Please refresh.');
+            setIsAuthLoading(false);
+          }
+        }, 5000);
+
+        // Check for existing session
+        const user = await authService.getCurrentUser();
+        
+        if (isMounted) {
+          clearTimeout(timeoutId);
+          console.log('✅ Auth check complete:', user ? user.email : 'No user');
+          setCurrentUser(user);
+          setIsAuthLoading(false);
+        }
+      } catch (error) {
+        if (isMounted) {
+          console.error('❌ Auth error:', error);
+          setAuthError('Authentication error');
+          setCurrentUser(null);
+          setIsAuthLoading(false);
+        }
+      }
+    };
+
+    initAuth();
+
     // Listen for auth changes
     const { data: { subscription } } = authService.onAuthStateChange((user) => {
-      setCurrentUser(user);
-      setIsAuthLoading(false);
+      if (isMounted) {
+        console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
+        setCurrentUser(user);
+        setIsAuthLoading(false);
+      }
     });
 
     return () => {
+      isMounted = false;
+      clearTimeout(timeoutId);
       subscription.unsubscribe();
     };
   }, []);
-
-  const checkSession = async () => {
-    try {
-      console.log('Checking session...');
-      const user = await authService.getCurrentUser();
-      console.log('Current user:', user);
-      setCurrentUser(user);
-    } catch (error) {
-      console.error('Error checking session:', error);
-      setCurrentUser(null);
-    } finally {
-      setIsAuthLoading(false);
-    }
-  };
 
   const logout = async () => {
     try {
@@ -76,11 +108,9 @@ const App: React.FC = () => {
     setIsRequesting(true);
     
     try {
-      // Create trip in Supabase
       const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
       setCurrentTrip(trip);
 
-      // Listen for updates
       supabase.subscribe(`trip-${trip.id}`, (data) => {
         if (data.event === 'trip_accepted') {
           setCurrentTrip(prev => ({ ...data.payload.trip }));
@@ -140,7 +170,7 @@ const App: React.FC = () => {
     });
 
     try {
-      const stream = await rtc.startCall(true); // true = initiator
+      const stream = await rtc.startCall(true);
       setLocalStream(stream);
     } catch (err) {
       console.error("Failed to start call", err);
@@ -163,14 +193,25 @@ const App: React.FC = () => {
         <div className="text-center space-y-4">
           <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
           <p className="text-white text-xl font-medium">Loading Adaidaita...</p>
+          {authError && (
+            <div className="mt-4">
+              <p className="text-red-400 text-sm mb-2">{authError}</p>
+              <button 
+                onClick={() => window.location.reload()} 
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+              >
+                Refresh Page
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
   }
 
-  // --- Render Unauthenticated (Show Auth Modal) ---
+  // --- Render Unauthenticated ---
   if (!currentUser) {
-    return <AuthModal onSuccess={checkSession} />;
+    return <AuthModal onSuccess={() => window.location.reload()} />;
   }
 
   // --- Render Authenticated App ---
@@ -235,7 +276,7 @@ const App: React.FC = () => {
           remoteStream={remoteStream}
           onEndCall={endCall}
           isConnecting={isCalling}
-          remoteUserName={currentUser.role === UserRole.RIDER ? "Bob Driver" : "Alice Rider"}
+          remoteUserName={currentUser.role === UserRole.RIDER ? "Driver" : "Rider"}
         />
       )}
     </div>
