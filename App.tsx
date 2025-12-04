@@ -22,6 +22,7 @@ const App: React.FC = () => {
   const [pickupInput, setPickupInput] = useState('Central Market');
   const [destinationInput, setDestinationInput] = useState('');
   const [isRequesting, setIsRequesting] = useState(false);
+  const [requestError, setRequestError] = useState('');
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
   
@@ -74,6 +75,9 @@ const App: React.FC = () => {
       setCurrentUser(null);
       setCurrentTrip(null);
       setIsCallModalOpen(false);
+      setRequestError('');
+      setPickupInput('Central Market');
+      setDestinationInput('');
     } catch (error) {
       console.error('Error logging out:', error);
     }
@@ -83,6 +87,7 @@ const App: React.FC = () => {
   const requestTrip = async () => {
     if (!currentUser) return;
     setIsRequesting(true);
+    setRequestError('');
     
     try {
       // Create trip in Supabase
@@ -99,8 +104,9 @@ const App: React.FC = () => {
           setCurrentTrip(prev => prev ? ({ ...prev, status: data.payload.status }) : null);
         }
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error requesting trip:', error);
+      setRequestError(error.message || 'Failed to request trip. Please try again.');
     } finally {
       setIsRequesting(false);
     }
@@ -212,6 +218,7 @@ const App: React.FC = () => {
             setDestination={setDestinationInput}
             onRequest={requestTrip}
             isLoading={isRequesting}
+            error={requestError}
           />
         )}
 
