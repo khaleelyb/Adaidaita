@@ -77,20 +77,16 @@ class SupabaseService {
       throw new Error("You must be logged in to request a ride.");
     }
 
-    console.log("Creating trip...", {
-      authUserId: session.user.id,
-      profileId: riderProfileId
-    });
+    const authUserId = session.user.id;
 
-    // Try inserting with the Auth User ID first (Common RLS pattern: auth.uid() = rider_id)
-    // We ignore the passed 'riderProfileId' for the INSERT to satisfy potential RLS policies 
-    // that check against auth.uid(). 
-    // If the database actually requires the Profile ID, this might need a schema adjustment or 
-    // the RLS policy should be: rider_id IN (select id from users where auth_user_id = auth.uid())
-    const { data, error } = await supabaseClient
+    console.log("Creating trip... Attempting with Profile ID first:", riderProfileId);
+
+    // ATTEMPT 1: Use the Profile ID (public.users.id)
+    // This is the most likely requirement if the table relates to 'users' table.
+    let { data, error } = await supabaseClient
       .from('trips')
       .insert({
-        rider_id: session.user.id, // Using Auth ID to pass RLS
+        rider_id: riderProfileId,
         pickup_location: pickup,
         destination_location: destination,
         status: TripStatus.SEARCHING,
@@ -102,16 +98,18 @@ class SupabaseService {
       .single();
 
     if (error) {
-      console.error('Error creating trip with Auth ID:', error);
+      console.warn('Attempt 1 (Profile ID) failed:', error.message, error.code);
       
-      // Fallback: If FK violation (e.g. rider_id must be profile ID), try using profile ID
-      // This only works if RLS allows it.
-      if (error.code === '23503') { // Foreign key violation
-         console.warn("Auth ID failed FK check. Retrying with Profile ID...");
-         const { data: retryData, error: retryError } = await supabaseClient
+      // Check if it's RLS (42501) or FK (23503) error
+      if (error.code === '42501' || error.code === '23503') {
+        console.log("Attempting fallback with Auth User ID:", authUserId);
+        
+        // ATTEMPT 2: Use the Auth User ID (auth.users.id)
+        // This is the fallback if the table relates directly to auth.users or policy expects auth.uid()
+        const retryResult = await supabaseClient
           .from('trips')
           .insert({
-            rider_id: riderProfileId,
+            rider_id: authUserId,
             pickup_location: pickup,
             destination_location: destination,
             status: TripStatus.SEARCHING,
@@ -122,14 +120,20 @@ class SupabaseService {
           .select()
           .single();
           
-          if (retryError) throw retryError;
-          // Auto-assign driver after 3 seconds
-          setTimeout(() => this.autoAssignDriver(retryData.id), 3000);
-          return this.mapTrip(retryData);
+        if (retryResult.error) {
+          console.error("Attempt 2 (Auth ID) also failed:", retryResult.error);
+          // If both fail, throw the original error (likely the RLS one which is more descriptive for the user)
+          // or a combined message.
+          throw new Error(`Trip creation failed: ${error.message} (RLS/FK)`);
+        }
+        
+        data = retryResult.data;
+      } else {
+        throw error;
       }
-
-      throw error;
     }
+
+    if (!data) throw new Error("Trip creation failed: No data returned.");
 
     // Auto-assign driver after 3 seconds
     setTimeout(() => this.autoAssignDriver(data.id), 3000);
