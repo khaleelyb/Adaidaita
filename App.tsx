@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, Trip, TripStatus, User } from './types';
-import { MOCK_DRIVER_USER, MOCK_RIDER_USER } from './constants';
-import { supabase } from './services/Supabase';
+import { supabase } from './services/supabase';
+import { authService } from './services/auth';
 import { WebRTCService } from './services/webrtcService';
 import { Button } from './components/Button';
 import { MapVisualizer } from './components/MapVisualizer';
@@ -10,7 +10,68 @@ import { CallModal } from './components/CallModal';
 import { Header } from './components/Header';
 import { RideRequestPanel } from './components/RideRequestPanel';
 import { TripStatusPanel } from './components/TripStatusPanel';
-import { Car, User as UserIcon } from 'lucide-react';
+import { AuthModal } from './components/AuthModal';
+import { Car } from 'lucide-react';
+
+const App: React.FC = () => {
+  // Global State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  // ... rest of your state ...
+
+  // Check for existing session on mount
+  useEffect(() => {
+    checkSession();
+    
+    // Listen for auth changes
+    const { data: { subscription } } = authService.onAuthStateChange((user) => {
+      setCurrentUser(user);
+      setIsLoading(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const checkSession = async () => {
+    try {
+      const user = await authService.getCurrentUser();
+      setCurrentUser(user);
+    } catch (error) {
+      console.error('Error checking session:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const logout = async () => {
+    await authService.signOut();
+    setCurrentUser(null);
+    setCurrentTrip(null);
+    setIsCallModalOpen(false);
+  };
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-zinc-900 flex items-center justify-center">
+        <div className="text-white text-xl">Loading...</div>
+      </div>
+    );
+  }
+
+  // Show auth modal if not logged in
+  if (!currentUser) {
+    return <AuthModal onSuccess={checkSession} />;
+  }
+
+  // ... rest of your App component stays the same ...
+};
+
+export default App;
 
 const App: React.FC = () => {
   // Global State
