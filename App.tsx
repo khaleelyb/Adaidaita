@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, Trip, TripStatus, User } from './types';
-import { supabase } from './services/supabase';
+import { supabase } from './services/Supabase';
 import { authService } from './services/auth';
 import { WebRTCService } from './services/webrtcService';
 import { Button } from './components/Button';
