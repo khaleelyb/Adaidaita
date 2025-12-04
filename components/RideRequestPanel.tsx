@@ -8,6 +8,7 @@ interface RideRequestPanelProps {
   setDestination: (val: string) => void;
   onRequest: () => void;
   isLoading: boolean;
+  error?: string;
 }
 
 export const RideRequestPanel: React.FC<RideRequestPanelProps> = ({
@@ -16,7 +17,8 @@ export const RideRequestPanel: React.FC<RideRequestPanelProps> = ({
   destination,
   setDestination,
   onRequest,
-  isLoading
+  isLoading,
+  error
 }) => {
   return (
     <div className="bg-white rounded-t-3xl shadow-[0_-8px_30px_rgba(0,0,0,0.12)] p-6 space-y-6 animate-in slide-in-from-bottom duration-300">
@@ -61,6 +63,12 @@ export const RideRequestPanel: React.FC<RideRequestPanelProps> = ({
             </div>
           </div>
         </div>
+
+        {error && (
+          <div className="text-red-500 text-sm bg-red-50 p-3 rounded-xl border border-red-100">
+            {error}
+          </div>
+        )}
       </div>
 
       <div className="pt-2">
