@@ -1,5 +1,16 @@
-import { supabaseClient as supabase } from './supabaseClient';
+import { createClient } from '@supabase/supabase-js';
+import { SUPABASE_CONFIG } from '../constants';
 import { User, UserRole } from '../types';
+
+const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: window.localStorage, // Explicitly use localStorage
+    storageKey: 'adaidaita-auth-token', // Custom key to avoid conflicts
+  }
+});
 
 // Enhanced logging helper
 const log = {
