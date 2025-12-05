@@ -18,6 +18,10 @@ export interface User {
   name: string;
   role: UserRole;
   avatarUrl?: string;
+  // Driver specific fields (optional on User base type for convenience)
+  vehicleModel?: string;
+  vehiclePlate?: string;
+  rating?: number;
 }
 
 export interface Location {
@@ -43,6 +47,22 @@ export interface Trip {
   status: TripStatus;
   fare: number;
   driverLocation?: Location;
+  
+  // Expanded details
+  rider?: {
+    name: string;
+    avatarUrl?: string;
+    rating?: number;
+    phone?: string;
+  };
+  driver?: {
+    name: string;
+    avatarUrl?: string;
+    vehicleModel?: string;
+    vehiclePlate?: string;
+    rating?: number;
+    phone?: string;
+  };
 }
 
 export interface WebRTCMessage {
