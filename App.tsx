@@ -1,381 +1,348 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { UserRole, Trip, TripStatus, User } from './types';
-import { supabase } from './services/Supabase';
-import { authService } from './services/auth';
-import { WebRTCService } from './services/webrtcService';
-import { MapVisualizer } from './components/MapVisualizer';
-import { CallModal } from './components/CallModal';
-import { Header } from './components/Header';
-import { RideRequestPanel } from './components/RideRequestPanel';
-import { TripStatusPanel } from './components/TripStatusPanel';
-import { AuthModal } from './components/AuthModal';
-import { Car, MapPin, Navigation } from 'lucide-react';
-import { Button } from './components/Button';
+import { createClient } from '@supabase/supabase-js';
+import { SUPABASE_CONFIG } from '../constants';
+import { User, UserRole } from '../types';
 
-const App: React.FC = () => {
-  // Global State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
-  const [availableTrip, setAvailableTrip] = useState<Trip | null>(null); // For drivers
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
-  const [authError, setAuthError] = useState<string | null>(null);
-  
-  // UI State
-  const [pickupInput, setPickupInput] = useState('Central Market');
-  const [destinationInput, setDestinationInput] = useState('');
-  const [isRequesting, setIsRequesting] = useState(false);
-  const [isCallModalOpen, setIsCallModalOpen] = useState(false);
-  const [isCalling, setIsCalling] = useState(false);
-  
-  // WebRTC State
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const rtcServiceRef = useRef<WebRTCService | null>(null);
-  const authCheckRef = useRef(false);
-
-  // --- Auth Handlers ---
-  useEffect(() => {
-    // Prevent double execution in strict mode
-    if (authCheckRef.current) return;
-    authCheckRef.current = true;
-
-    let isMounted = true;
-    let authSubscription: { unsubscribe: () => void } | null = null;
-
-    // Safety timeout: If auth takes too long, stop loading so user isn't stuck
-    const loadingTimeout = setTimeout(() => {
-      if (isMounted && isAuthLoading) {
-        console.warn('⚠️ Auth check timed out. Forcing UI to load.');
-        setIsAuthLoading(false);
-      }
-    }, 3000); // 3 seconds max wait time
-
-    const initAuth = async () => {
-      try {
-        console.log('🔐 Initializing authentication...');
-        
-        // 1. Check for current session immediately
-        const user = await authService.getCurrentUser();
-        
-        if (isMounted) {
-          if (user) {
-            console.log('✅ User restored:', user.email);
-            setCurrentUser(user);
-          } else {
-            console.log('ℹ️ No active session found on init');
-          }
-          // We don't set loading false here immediately if we want to wait for the listener
-          // But actually, if we found a user, we are good.
-          if (user) setIsAuthLoading(false);
-        }
-      } catch (error) {
-        console.error('❌ Auth initialization error:', error);
-        // Don't stop loading here, let the timeout or the listener handle it to be safe
-      }
-    };
-
-    // 2. Listen for auth changes (Login, Logout, Auto-refresh)
-    // This often fires immediately with the initial session too
-    const { data: { subscription } } = authService.onAuthStateChange((user) => {
-      if (!isMounted) return;
-      
-      console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
-      setCurrentUser(user);
-      setIsAuthLoading(false); // Success! Stop loading.
-      
-      if (!user) {
-        // Cleanup on logout
-        setCurrentTrip(null);
-        setAvailableTrip(null);
-      }
-    });
-    
-    authSubscription = subscription;
-    initAuth();
-
-    return () => {
-      isMounted = false;
-      clearTimeout(loadingTimeout);
-      if (authSubscription) authSubscription.unsubscribe();
-    };
-  }, []); // Empty dependency array intentionally
-
-  // --- Driver Online Status & Trip Subscription ---
-  useEffect(() => {
-    if (!currentUser || currentUser.role !== UserRole.DRIVER) return;
-
-    console.log('🚕 Driver detected. Setting online and subscribing...');
-    
-    // 1. Set Online
-    supabase.setDriverOnline(currentUser.id, true);
-
-    // 2. Subscribe to Available Trips
-    const subscription = supabase.subscribeToAvailableTrips((trip) => {
-      console.log('🔔 New trip available:', trip);
-      // Only show if driver is not currently in a trip
-      if (!currentTrip) {
-        setAvailableTrip(trip);
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-      supabase.setDriverOnline(currentUser.id, false);
-    };
-  }, [currentUser?.id, currentUser?.role, currentTrip]); // Re-subscribe if currentTrip changes (to re-enable listening when idle)
-
-  const logout = async () => {
-    try {
-      await authService.signOut();
-      setCurrentUser(null);
-      setCurrentTrip(null);
-      setAvailableTrip(null);
-      setIsCallModalOpen(false);
-    } catch (error) {
-      console.error('Error logging out:', error);
-    }
-  };
-
-  // --- Trip Handlers (Rider) ---
-  const requestTrip = async () => {
-    if (!currentUser) return;
-    setIsRequesting(true);
-    
-    try {
-      const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
-      setCurrentTrip(trip);
-
-      // Subscribe to this specific trip updates
-      const sub = supabase.subscribe(`trip-${trip.id}`, (data) => {
-        if (data.event === 'trip_updated') {
-          setCurrentTrip(data.payload.trip);
-        } else if (data.event === 'location_update') {
-          setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
-        }
-      });
-      
-    } catch (error) {
-      console.error('Error requesting trip:', error);
-    } finally {
-      setIsRequesting(false);
-    }
-  };
-
-  // --- Trip Handlers (Driver) ---
-  const acceptTrip = async () => {
-    if (!availableTrip || !currentUser) return;
-
-    try {
-      const trip = await supabase.acceptTrip(availableTrip.id, currentUser.id);
-      if (trip) {
-        setCurrentTrip(trip);
-        setAvailableTrip(null); // Clear notification
-
-        // Subscribe to updates for this trip
-        supabase.subscribe(`trip-${trip.id}`, (data) => {
-          if (data.event === 'trip_updated') {
-            setCurrentTrip(data.payload.trip);
-          }
-        });
-      }
-    } catch (error) {
-      console.error('Error accepting trip:', error);
-    }
-  };
-
-  // --- Shared Trip Status Updates ---
-  const updateTripStatus = async (status: TripStatus) => {
-    if (!currentTrip) return;
-
-    if (status === TripStatus.IDLE) {
-      // Completed or Cancelled -> Reset
-      setCurrentTrip(null);
-      return;
-    }
-    
-    try {
-      await supabase.updateTripStatus(currentTrip.id, status);
-      // Optimistic update
-      setCurrentTrip(prev => prev ? ({ ...prev, status }) : null);
-    } catch (error) {
-      console.error('Error updating trip status:', error);
-    }
-  };
-
-  // --- WebRTC Handlers ---
-  const startCall = async () => {
-    if (!currentTrip) return;
-
-    setIsCallModalOpen(true);
-    setIsCalling(true);
-
-    const rtc = new WebRTCService(currentTrip.id);
-    rtcServiceRef.current = rtc;
-
-    rtc.onRemoteStream((stream) => {
-      setRemoteStream(stream);
-      setIsCalling(false);
-    });
-
-    rtc.onCallEnd(() => {
-      setIsCallModalOpen(false);
-      setLocalStream(null);
-      setRemoteStream(null);
-    });
-
-    try {
-      const stream = await rtc.startCall(true);
-      setLocalStream(stream);
-    } catch (err) {
-      console.error("Failed to start call", err);
-      setIsCallModalOpen(false);
-      setIsCalling(false);
-    }
-  };
-
-  const endCall = () => {
-    rtcServiceRef.current?.endCall();
-    setIsCallModalOpen(false);
-    setLocalStream(null);
-    setRemoteStream(null);
-  };
-
-  // --- Loading State ---
-  if (isAuthLoading) {
-    return (
-      <div className="min-h-screen bg-zinc-900 flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-white text-xl font-medium">Loading Adaidaita...</p>
-          <p className="text-zinc-500 text-sm">Waiting for secure connection...</p>
-        </div>
-      </div>
-    );
+const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true
   }
+});
 
-  // --- Render Unauthenticated ---
-  if (!currentUser) {
-    return <AuthModal onSuccess={() => {
-      // Manual trigger if needed, though onAuthStateChange usually handles it
-      // Intentionally empty to let the effect handle state
-    }} />;
-  }
-
-  // --- Render Authenticated App ---
-  return (
-    <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans">
-      
-      {/* 1. Header Layer */}
-      <Header user={currentUser} onLogout={logout} />
-
-      {/* 2. Map Background Layer */}
-      <div className="absolute inset-0 z-0">
-        <MapVisualizer 
-          role={currentUser.role} 
-          driverLocation={currentTrip?.driverLocation}
-          pickup={currentTrip?.pickup || (pickupInput && isRequesting ? pickupInput : pickupInput)}
-          isSearching={currentTrip?.status === TripStatus.SEARCHING}
-          onLocationSelect={setPickupInput}
-        />
-      </div>
-
-      {/* 3. Driver Incoming Request Notification */}
-      {currentUser.role === UserRole.DRIVER && availableTrip && !currentTrip && (
-        <div className="absolute top-24 left-4 right-4 z-40 md:left-auto md:right-8 md:w-96">
-          <div className="bg-white rounded-2xl shadow-2xl border-2 border-emerald-500 p-6 animate-in slide-in-from-top duration-500">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
-                  <Navigation size={20} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-zinc-900">New Trip Request!</h3>
-                  <p className="text-sm text-zinc-500">{availableTrip.fare} NGN • 2.5 km</p>
-                </div>
-              </div>
-              <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded-full animate-pulse">
-                NEW
-              </span>
-            </div>
-            
-            <div className="space-y-3 mb-6">
-              <div className="flex items-center gap-3 text-zinc-700">
-                <MapPin size={18} className="text-zinc-400" />
-                <span className="text-sm font-medium">{availableTrip.pickup}</span>
-              </div>
-              <div className="flex items-center gap-3 text-zinc-700">
-                <MapPin size={18} className="text-emerald-500" />
-                <span className="text-sm font-medium">{availableTrip.destination}</span>
-              </div>
-            </div>
-
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setAvailableTrip(null)}
-                className="flex-1 px-4 py-3 bg-zinc-100 text-zinc-700 font-semibold rounded-xl hover:bg-zinc-200 transition-colors"
-              >
-                Decline
-              </button>
-              <button 
-                onClick={acceptTrip}
-                className="flex-1 px-4 py-3 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200"
-              >
-                Accept Ride
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 4. Bottom Sheet / Control Layer */}
-      <div className="absolute bottom-0 left-0 right-0 z-30 p-4 md:max-w-md md:mx-auto md:bottom-8">
-        
-        {/* Scenario A: Rider - No Trip */}
-        {currentUser.role === UserRole.RIDER && !currentTrip && (
-          <RideRequestPanel 
-            pickup={pickupInput}
-            setPickup={setPickupInput}
-            destination={destinationInput}
-            setDestination={setDestinationInput}
-            onRequest={requestTrip}
-            isLoading={isRequesting}
-          />
-        )}
-
-        {/* Scenario B: Active Trip (Rider or Driver) */}
-        {currentTrip && (
-          <TripStatusPanel 
-            trip={currentTrip}
-            userRole={currentUser.role}
-            onStatusUpdate={updateTripStatus}
-            onCall={startCall}
-          />
-        )}
-
-        {/* Scenario C: Driver - Idle (Online) */}
-        {currentUser.role === UserRole.DRIVER && !currentTrip && !availableTrip && (
-           <div className="bg-white rounded-2xl shadow-xl p-6 text-center border border-zinc-100">
-              <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-                <Car size={32} className="text-emerald-600" />
-              </div>
-              <h3 className="text-xl font-bold text-zinc-900">You are Online</h3>
-              <p className="text-zinc-500 mt-1">Waiting for nearby ride requests...</p>
-           </div>
-        )}
-      </div>
-
-      {/* 5. Full Screen Modal Layer */}
-      {isCallModalOpen && (
-        <CallModal 
-          localStream={localStream}
-          remoteStream={remoteStream}
-          onEndCall={endCall}
-          isConnecting={isCalling}
-          remoteUserName={currentUser.role === UserRole.RIDER ? "Driver" : "Rider"}
-        />
-      )}
-    </div>
-  );
+// Enhanced logging helper
+const log = {
+  info: (msg: string, data?: any) => console.log(`[Auth] ${msg}`, data || ''),
+  error: (msg: string, error?: any) => console.error(`[Auth] ❌ ${msg}`, error || ''),
+  success: (msg: string, data?: any) => console.log(`[Auth] ✅ ${msg}`, data || ''),
+  warn: (msg: string, data?: any) => console.warn(`[Auth] ⚠️ ${msg}`, data || '')
 };
 
-export default App;
+export class AuthService {
+  // Sign up new user
+  async signUp(email: string, password: string, name: string, role: UserRole) {
+    try {
+      log.info('Starting sign up process...', { email, role });
+      
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name,
+            role,
+            avatar_url: `https://i.pravatar.cc/150?u=${email}`
+          },
+          emailRedirectTo: window.location.origin
+        }
+      });
+
+      if (authError) {
+        log.error('Auth signup failed', authError);
+        throw new Error(authError.message);
+      }
+
+      if (!authData.user) {
+        log.error('No user returned from signup');
+        throw new Error('Account creation failed. Please try again.');
+      }
+
+      log.success('Auth user created', { id: authData.user.id, email: authData.user.email });
+
+      // Create user profile in public.users table
+      // We wrap this in a try-catch to handle race conditions (e.g. if a DB trigger already created it)
+      try {
+        const { data: profileData, error: profileError } = await supabase
+          .from('users')
+          .insert({
+            id: authData.user.id,
+            email: authData.user.email!,
+            name,
+            role,
+            avatar_url: `https://i.pravatar.cc/150?u=${email}`
+          })
+          .select()
+          .single();
+
+        if (profileError) {
+          // Check for duplicate key error (code 23505)
+          // This often happens if Supabase has a Trigger that auto-creates the user profile
+          if (profileError.code === '23505') {
+            log.warn('Profile already exists (likely created by DB trigger). This is fine.');
+          } else {
+            log.error('Profile creation failed', profileError);
+            // We do NOT throw here immediately, because the Auth User was created successfully.
+            // If we throw, the user thinks signup failed, but they can't sign up again (email taken).
+            // We'll rely on signIn/getCurrentUser to fix/fetch the profile later.
+            console.warn('Proceeding despite profile creation error, will attempt recovery on login.');
+          }
+        } else {
+          log.success('User profile created manually', profileData);
+        }
+      } catch (profileErr: any) {
+        log.error('Profile creation exception', profileErr);
+        // Swallow exception to allow signup to complete at Auth level
+      }
+
+      // Check if email confirmation is required
+      if (authData.session) {
+        log.success('Account created and signed in automatically');
+        return authData;
+      } else {
+        log.warn('Email confirmation required');
+        // If the session is missing, it usually means email confirmation is on.
+        // We still return success to the UI so it can show "Check your email".
+        return authData;
+      }
+    } catch (error: any) {
+      log.error('Signup error', error);
+      throw error;
+    }
+  }
+
+  // Sign in existing user
+  async signIn(email: string, password: string) {
+    try {
+      log.info('Starting sign in...', { email });
+      
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) {
+        log.error('Sign in failed', { code: error.status, message: error.message });
+        
+        // Provide user-friendly error messages
+        if (error.message.includes('Invalid login credentials')) {
+          throw new Error('Invalid email or password. Please try again.');
+        } else if (error.message.includes('Email not confirmed')) {
+          throw new Error('Please confirm your email before signing in.');
+        } else {
+          throw new Error(error.message);
+        }
+      }
+
+      if (!data.user) {
+        log.error('No user returned from sign in');
+        throw new Error('Sign in failed. Please try again.');
+      }
+
+      log.success('Sign in successful', { id: data.user.id, email: data.user.email });
+
+      // Verify user profile exists
+      // We wait a moment to ensure any async triggers have fired if this is the first login
+      const profile = await this.getUserProfile(data.user.id);
+      
+      if (!profile) {
+        log.warn('User profile not found after sign in, attempting to create one...');
+        await this.createUserProfile(data.user);
+      }
+
+      return data;
+    } catch (error: any) {
+      log.error('Sign in error', error);
+      throw error;
+    }
+  }
+
+  // Sign out
+  async signOut() {
+    try {
+      log.info('Signing out...');
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        log.error('Sign out failed', error);
+        throw error;
+      }
+      log.success('Signed out successfully');
+    } catch (error: any) {
+      log.error('Sign out error', error);
+      throw error;
+    }
+  }
+
+  // Get current session
+  async getSession() {
+    try {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) {
+        log.error('Get session failed', error);
+        throw error;
+      }
+      return session;
+    } catch (error: any) {
+      log.error('Get session error', error);
+      throw error;
+    }
+  }
+
+  // Get user profile from database
+  private async getUserProfile(userId: string): Promise<any | null> {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (error) {
+        if (error.code === 'PGRST116') {
+          log.warn('User profile not found (PGRST116)', { userId });
+          return null;
+        }
+        log.error('Error fetching user profile', error);
+        // We throw here because if it's a connection error or RLS error, we need to know.
+        // However, for the consumer (getCurrentUser), we might want to be careful.
+        throw error;
+      }
+
+      return data;
+    } catch (error) {
+      // If it's the error we threw above, rethrow it? 
+      // Or return null to trigger "create profile"? 
+      // If it's a network error, creating profile won't work either.
+      log.error('Get user profile exception', error);
+      return null;
+    }
+  }
+
+  // Get current user with profile
+  async getCurrentUser(): Promise<User | null> {
+    try {
+      // log.info('Getting current user...');
+      
+      const session = await this.getSession();
+      
+      if (!session?.user) {
+        // log.info('No active session');
+        return null;
+      }
+
+      // log.info('Session found', { userId: session.user.id });
+
+      // Fetch user profile
+      const profile = await this.getUserProfile(session.user.id);
+
+      if (!profile) {
+        log.warn('User profile not found in getCurrentUser, creating one...');
+        return await this.createUserProfile(session.user);
+      }
+
+      // log.success('User profile fetched successfully');
+
+      return {
+        id: profile.id,
+        email: profile.email,
+        name: profile.name,
+        role: profile.role as UserRole,
+        avatarUrl: profile.avatar_url,
+        vehicleModel: profile.vehicle_model,
+        vehiclePlate: profile.vehicle_plate,
+        rating: profile.rating
+      };
+    } catch (error: any) {
+      log.error('Get current user error', error);
+      return null;
+    }
+  }
+
+  // Create user profile if it doesn't exist
+  private async createUserProfile(authUser: any): Promise<User | null> {
+    try {
+      log.info('Creating user profile...', { userId: authUser.id });
+      
+      const metadata = authUser.user_metadata || {};
+      
+      const { data, error } = await supabase
+        .from('users')
+        .insert({
+          id: authUser.id,
+          email: authUser.email,
+          name: metadata.name || authUser.email?.split('@')[0] || 'User',
+          role: metadata.role || UserRole.RIDER,
+          avatar_url: metadata.avatar_url || `https://i.pravatar.cc/150?u=${authUser.email}`
+        })
+        .select()
+        .single();
+
+      if (error) {
+        // Check if user already exists (race condition)
+        if (error.code === '23505') {
+          log.warn('User profile already exists (race condition handled)');
+          // Try fetching it again
+          const existingProfile = await this.getUserProfile(authUser.id);
+          if (existingProfile) {
+             return {
+              id: existingProfile.id,
+              email: existingProfile.email,
+              name: existingProfile.name,
+              role: existingProfile.role as UserRole,
+              avatarUrl: existingProfile.avatar_url,
+              vehicleModel: existingProfile.vehicle_model,
+              vehiclePlate: existingProfile.vehicle_plate,
+              rating: existingProfile.rating
+            };
+          }
+        }
+        
+        log.error('Create user profile failed', error);
+        throw new Error(`Failed to create profile: ${error.message}`);
+      }
+
+      log.success('User profile created successfully', data);
+
+      return {
+        id: data.id,
+        email: data.email,
+        name: data.name,
+        role: data.role as UserRole,
+        avatarUrl: data.avatar_url,
+        vehicleModel: data.vehicle_model,
+        vehiclePlate: data.vehicle_plate,
+        rating: data.rating
+      };
+    } catch (error: any) {
+      log.error('Create user profile error', error);
+      return null;
+    }
+  }
+
+  // Listen to auth state changes
+  onAuthStateChange(callback: (user: User | null) => void) {
+    log.info('Setting up auth state listener...');
+    
+    return supabase.auth.onAuthStateChange(async (event, session) => {
+      log.info('Auth state changed', { event, hasSession: !!session });
+      
+      if (session?.user) {
+        // Debounce or slight delay might help if DB triggers are slow
+        const user = await this.getCurrentUser();
+        callback(user);
+      } else {
+        callback(null);
+      }
+    });
+  }
+
+  // Test connection to Supabase
+  async testConnection(): Promise<boolean> {
+    try {
+      log.info('Testing Supabase connection...');
+      const { data, error } = await supabase.from('users').select('count').limit(1);
+      
+      if (error) {
+        log.error('Connection test failed', error);
+        return false;
+      }
+      
+      log.success('Connection test successful');
+      return true;
+    } catch (error) {
+      log.error('Connection test error', error);
+      return false;
+    }
+  }
+}
+
+export const authService = new AuthService();
