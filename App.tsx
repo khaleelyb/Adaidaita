@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, Trip, TripStatus, User } from './types';
 import { supabase } from './services/Supabase';
 import { authService } from './services/auth';
@@ -10,23 +10,19 @@ import { Header } from './components/Header';
 import { RideRequestPanel } from './components/RideRequestPanel';
 import { TripStatusPanel } from './components/TripStatusPanel';
 import { AuthModal } from './components/AuthModal';
-import { OfflineIndicator } from './components/OfflineIndicator';
-import { LoadingScreen } from './components/LoadingScreen';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { Car, Wifi, WifiOff } from 'lucide-react';
+import { Car } from 'lucide-react';
 
 const App: React.FC = () => {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [authError, setAuthError] = useState<string | null>(null);
   
   // UI State
   const [pickupInput, setPickupInput] = useState('Central Market');
   const [destinationInput, setDestinationInput] = useState('');
   const [isRequesting, setIsRequesting] = useState(false);
-  const [requestError, setRequestError] = useState('');
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
   
@@ -34,196 +30,127 @@ const App: React.FC = () => {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const rtcServiceRef = useRef<WebRTCService | null>(null);
-  
-  // Refs for cleanup
-  const subscriptionRef = useRef<any>(null);
-  const isMountedRef = useRef(true);
+  const authCheckRef = useRef(false);
 
-  // Online/Offline Detection
+  // --- Auth Handlers ---
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      if (currentUser) {
-        checkSession(); // Refresh session when back online
+    // Prevent double execution in development mode
+    if (authCheckRef.current) return;
+    authCheckRef.current = true;
+
+    let timeoutId: NodeJS.Timeout;
+    let isMounted = true;
+
+    const initAuth = async () => {
+      try {
+        console.log('🔐 Initializing authentication...');
+        
+        // Set timeout to prevent infinite loading
+        timeoutId = setTimeout(() => {
+          if (isMounted) {
+            console.warn('⚠️ Auth check timed out after 5 seconds');
+            setAuthError('Connection timeout. Please refresh.');
+            setIsAuthLoading(false);
+          }
+        }, 5000);
+
+        // Check for existing session
+        const user = await authService.getCurrentUser();
+        
+        if (isMounted) {
+          clearTimeout(timeoutId);
+          console.log('✅ Auth check complete:', user ? user.email : 'No user');
+          setCurrentUser(user);
+          setIsAuthLoading(false);
+        }
+      } catch (error) {
+        if (isMounted) {
+          console.error('❌ Auth error:', error);
+          setAuthError('Authentication error');
+          setCurrentUser(null);
+          setIsAuthLoading(false);
+        }
       }
     };
-    const handleOffline = () => setIsOnline(false);
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    initAuth();
 
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [currentUser]);
-
-  // Auth Handlers with improved error handling
-  useEffect(() => {
-    isMountedRef.current = true;
-    
-    const timeoutId = setTimeout(() => {
-      if (isMountedRef.current && isAuthLoading) {
-        console.warn('Auth check timed out, showing login screen');
-        setIsAuthLoading(false);
-        setCurrentUser(null);
-      }
-    }, 5000); // 5 seconds timeout
-
-    checkSession();
-    
-    subscriptionRef.current = authService.onAuthStateChange((user) => {
-      if (isMountedRef.current) {
-        clearTimeout(timeoutId);
+    // Listen for auth changes
+    const { data: { subscription } } = authService.onAuthStateChange((user) => {
+      if (isMounted) {
+        console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
         setCurrentUser(user);
         setIsAuthLoading(false);
       }
     });
 
     return () => {
-      isMountedRef.current = false;
+      isMounted = false;
       clearTimeout(timeoutId);
-      if (subscriptionRef.current) {
-        subscriptionRef.current.data.subscription.unsubscribe();
-      }
+      subscription.unsubscribe();
     };
   }, []);
 
-  const checkSession = async () => {
-    if (!isOnline) {
-      console.log('Offline detected, skipping session check');
-      setIsAuthLoading(false);
-      return;
-    }
-
-    try {
-      console.log('Checking session...');
-      const user = await authService.getCurrentUser();
-      if (isMountedRef.current) {
-        console.log('Session check result:', user ? 'User found' : 'No user');
-        setCurrentUser(user);
-      }
-    } catch (error) {
-      console.error('Error checking session:', error);
-      if (isMountedRef.current) {
-        setCurrentUser(null);
-      }
-    } finally {
-      if (isMountedRef.current) {
-        setIsAuthLoading(false);
-      }
-    }
-  };
-
-  const logout = useCallback(async () => {
+  const logout = async () => {
     try {
       await authService.signOut();
-      if (isMountedRef.current) {
-        setCurrentUser(null);
-        setCurrentTrip(null);
-        setIsCallModalOpen(false);
-        setRequestError('');
-        setPickupInput('Central Market');
-        setDestinationInput('');
-      }
+      setCurrentUser(null);
+      setCurrentTrip(null);
+      setIsCallModalOpen(false);
     } catch (error) {
       console.error('Error logging out:', error);
     }
-  }, []);
+  };
 
-  // Trip Handlers with retry logic
+  // --- Trip Handlers ---
   const requestTrip = async () => {
-    if (!currentUser || !isOnline) {
-      setRequestError('No internet connection. Please try again when online.');
-      return;
-    }
-
-    if (!destinationInput.trim()) {
-      setRequestError('Please enter a destination');
-      return;
-    }
-
+    if (!currentUser) return;
     setIsRequesting(true);
-    setRequestError('');
     
-    let retries = 0;
-    const maxRetries = 3;
+    try {
+      const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
+      setCurrentTrip(trip);
 
-    while (retries < maxRetries) {
-      try {
-        const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
-        
-        if (isMountedRef.current) {
-          setCurrentTrip(trip);
-
-          // Listen for updates with error handling
-          supabase.subscribe(`trip-${trip.id}`, (data) => {
-            if (!isMountedRef.current) return;
-
-            try {
-              if (data.event === 'trip_accepted') {
-                setCurrentTrip(prev => ({ ...data.payload.trip }));
-              } else if (data.event === 'location_update') {
-                setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
-              } else if (data.event === 'status_change') {
-                setCurrentTrip(prev => prev ? ({ ...prev, status: data.payload.status }) : null);
-              }
-            } catch (err) {
-              console.error('Error processing trip update:', err);
-            }
-          });
+      supabase.subscribe(`trip-${trip.id}`, (data) => {
+        if (data.event === 'trip_accepted') {
+          setCurrentTrip(prev => ({ ...data.payload.trip }));
+        } else if (data.event === 'location_update') {
+          setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
+        } else if (data.event === 'status_change') {
+          setCurrentTrip(prev => prev ? ({ ...prev, status: data.payload.status }) : null);
         }
-        
-        break; // Success, exit retry loop
-      } catch (error: any) {
-        console.error(`Trip request attempt ${retries + 1} failed:`, error);
-        retries++;
-        
-        if (retries >= maxRetries) {
-          if (isMountedRef.current) {
-            setRequestError(error.message || 'Failed to request trip. Please check your connection and try again.');
-          }
-        } else {
-          // Wait before retrying (exponential backoff)
-          await new Promise(resolve => setTimeout(resolve, 1000 * retries));
-        }
-      }
-    }
-    
-    if (isMountedRef.current) {
+      });
+    } catch (error) {
+      console.error('Error requesting trip:', error);
+    } finally {
       setIsRequesting(false);
     }
   };
 
-  const updateTripStatus = useCallback(async (status: TripStatus) => {
+  const updateTripStatus = async (status: TripStatus) => {
     if (!currentTrip) return;
 
-    if (status === TripStatus.IDLE || status === TripStatus.COMPLETED) {
+    if (status === TripStatus.IDLE) {
       setCurrentTrip(null);
-      setPickupInput('Central Market');
-      setDestinationInput('');
+      return;
+    }
+    
+    if (status === TripStatus.COMPLETED) {
+      setCurrentTrip(null);
       return;
     }
 
     try {
       await supabase.updateTripStatus(currentTrip.id, status);
-      if (isMountedRef.current) {
-        setCurrentTrip(prev => prev ? ({ ...prev, status }) : null);
-      }
+      setCurrentTrip(prev => prev ? ({ ...prev, status }) : null);
     } catch (error) {
       console.error('Error updating trip status:', error);
-      if (isMountedRef.current) {
-        setRequestError('Failed to update trip status. Please check your connection.');
-      }
     }
-  }, [currentTrip]);
+  };
 
-  // WebRTC Handlers with improved error handling
+  // --- WebRTC Handlers ---
   const startCall = async () => {
-    if (!currentTrip || !isOnline) {
-      setRequestError('Cannot start call without internet connection');
-      return;
-    }
+    if (!currentTrip) return;
 
     setIsCallModalOpen(true);
     setIsCalling(true);
@@ -232,146 +159,127 @@ const App: React.FC = () => {
     rtcServiceRef.current = rtc;
 
     rtc.onRemoteStream((stream) => {
-      if (isMountedRef.current) {
-        setRemoteStream(stream);
-        setIsCalling(false);
-      }
+      setRemoteStream(stream);
+      setIsCalling(false);
     });
 
     rtc.onCallEnd(() => {
-      if (isMountedRef.current) {
-        setIsCallModalOpen(false);
-        setLocalStream(null);
-        setRemoteStream(null);
-      }
+      setIsCallModalOpen(false);
+      setLocalStream(null);
+      setRemoteStream(null);
     });
 
     try {
       const stream = await rtc.startCall(true);
-      if (isMountedRef.current) {
-        setLocalStream(stream);
-      }
+      setLocalStream(stream);
     } catch (err) {
       console.error("Failed to start call", err);
-      if (isMountedRef.current) {
-        setIsCallModalOpen(false);
-        setIsCalling(false);
-        setRequestError('Failed to start call. Please check camera/microphone permissions.');
-      }
+      setIsCallModalOpen(false);
+      setIsCalling(false);
     }
   };
 
-  const endCall = useCallback(() => {
+  const endCall = () => {
     rtcServiceRef.current?.endCall();
-    if (isMountedRef.current) {
-      setIsCallModalOpen(false);
-      setLocalStream(null);
-      setRemoteStream(null);
-    }
-  }, []);
+    setIsCallModalOpen(false);
+    setLocalStream(null);
+    setRemoteStream(null);
+  };
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (rtcServiceRef.current) {
-        rtcServiceRef.current.endCall();
-      }
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [localStream]);
-
-  // Loading State
+  // --- Loading State ---
   if (isAuthLoading) {
-    return <LoadingScreen />;
-  }
-
-  // Unauthenticated State
-  if (!currentUser) {
-    return <AuthModal onSuccess={checkSession} />;
-  }
-
-  // Main App
-  return (
-    <ErrorBoundary>
-      <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans touch-pan-y">
-        
-        {/* Offline Indicator */}
-        {!isOnline && <OfflineIndicator />}
-
-        {/* Header */}
-        <Header user={currentUser} onLogout={logout} />
-
-        {/* Map Background */}
-        <div className="absolute inset-0 z-0">
-          <MapVisualizer 
-            role={currentUser.role} 
-            driverLocation={currentTrip?.driverLocation}
-            pickup={currentTrip?.pickup || (pickupInput && isRequesting ? pickupInput : pickupInput)}
-            isSearching={currentTrip?.status === TripStatus.SEARCHING}
-            onLocationSelect={setPickupInput}
-          />
+    return (
+      <div className="min-h-screen bg-zinc-900 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-white text-xl font-medium">Loading Adaidaita...</p>
+          {authError && (
+            <div className="mt-4">
+              <p className="text-red-400 text-sm mb-2">{authError}</p>
+              <button 
+                onClick={() => window.location.reload()} 
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+              >
+                Refresh Page
+              </button>
+            </div>
+          )}
         </div>
+      </div>
+    );
+  }
 
-        {/* Bottom Sheet / Control Layer */}
-        <div className="absolute bottom-0 left-0 right-0 z-30 p-4 pb-safe md:max-w-md md:mx-auto md:bottom-8">
-          
-          {/* Rider - No Trip */}
-          {currentUser.role === UserRole.RIDER && !currentTrip && (
-            <RideRequestPanel 
-              pickup={pickupInput}
-              setPickup={setPickupInput}
-              destination={destinationInput}
-              setDestination={setDestinationInput}
-              onRequest={requestTrip}
-              isLoading={isRequesting}
-              error={requestError}
-              disabled={!isOnline}
-            />
-          )}
+  // --- Render Unauthenticated ---
+  if (!currentUser) {
+    return <AuthModal onSuccess={() => window.location.reload()} />;
+  }
 
-          {/* Active Trip */}
-          {currentTrip && (
-            <TripStatusPanel 
-              trip={currentTrip}
-              userRole={currentUser.role}
-              onStatusUpdate={updateTripStatus}
-              onCall={startCall}
-              disabled={!isOnline}
-            />
-          )}
+  // --- Render Authenticated App ---
+  return (
+    <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans">
+      
+      {/* 1. Header Layer */}
+      <Header user={currentUser} onLogout={logout} />
 
-          {/* Driver - Idle */}
-          {currentUser.role === UserRole.DRIVER && !currentTrip && (
-            <div className="bg-white rounded-2xl shadow-xl p-6 text-center border border-zinc-100">
+      {/* 2. Map Background Layer */}
+      <div className="absolute inset-0 z-0">
+        <MapVisualizer 
+          role={currentUser.role} 
+          driverLocation={currentTrip?.driverLocation}
+          pickup={currentTrip?.pickup || (pickupInput && isRequesting ? pickupInput : pickupInput)}
+          isSearching={currentTrip?.status === TripStatus.SEARCHING}
+          onLocationSelect={setPickupInput}
+        />
+      </div>
+
+      {/* 3. Bottom Sheet / Control Layer */}
+      <div className="absolute bottom-0 left-0 right-0 z-30 p-4 md:max-w-md md:mx-auto md:bottom-8">
+        
+        {/* Scenario A: Rider - No Trip */}
+        {currentUser.role === UserRole.RIDER && !currentTrip && (
+          <RideRequestPanel 
+            pickup={pickupInput}
+            setPickup={setPickupInput}
+            destination={destinationInput}
+            setDestination={setDestinationInput}
+            onRequest={requestTrip}
+            isLoading={isRequesting}
+          />
+        )}
+
+        {/* Scenario B: Active Trip (Rider or Driver) */}
+        {currentTrip && (
+          <TripStatusPanel 
+            trip={currentTrip}
+            userRole={currentUser.role}
+            onStatusUpdate={updateTripStatus}
+            onCall={startCall}
+          />
+        )}
+
+        {/* Scenario C: Driver - Idle (Online) */}
+        {currentUser.role === UserRole.DRIVER && !currentTrip && (
+           <div className="bg-white rounded-2xl shadow-xl p-6 text-center border border-zinc-100">
               <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
                 <Car size={32} className="text-emerald-600" />
               </div>
               <h3 className="text-xl font-bold text-zinc-900">You are Online</h3>
               <p className="text-zinc-500 mt-1">Waiting for nearby ride requests...</p>
-              {!isOnline && (
-                <div className="mt-3 flex items-center justify-center text-amber-600 text-sm">
-                  <WifiOff size={16} className="mr-1" />
-                  <span>No internet connection</span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Call Modal */}
-        {isCallModalOpen && (
-          <CallModal 
-            localStream={localStream}
-            remoteStream={remoteStream}
-            onEndCall={endCall}
-            isConnecting={isCalling}
-            remoteUserName={currentUser.role === UserRole.RIDER ? "Driver" : "Rider"}
-          />
+           </div>
         )}
       </div>
-    </ErrorBoundary>
+
+      {/* 4. Full Screen Modal Layer */}
+      {isCallModalOpen && (
+        <CallModal 
+          localStream={localStream}
+          remoteStream={remoteStream}
+          onEndCall={endCall}
+          isConnecting={isCalling}
+          remoteUserName={currentUser.role === UserRole.RIDER ? "Driver" : "Rider"}
+        />
+      )}
+    </div>
   );
 };
 
