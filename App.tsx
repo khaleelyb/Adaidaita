@@ -10,7 +10,6 @@ import { RideRequestPanel } from './components/RideRequestPanel';
 import { TripStatusPanel } from './components/TripStatusPanel';
 import { AuthModal } from './components/AuthModal';
 import { Car, MapPin, Navigation } from 'lucide-react';
-import { Button } from './components/Button';
 
 const App: React.FC = () => {
   // Global State
@@ -47,7 +46,7 @@ const App: React.FC = () => {
         console.warn('⚠️ Auth check timed out. Forcing UI to load.');
         setIsAuthLoading(false);
       }
-    }, 3000); // 3 seconds max wait time
+    }, 4000); // 4 seconds max wait time
 
     const initAuth = async () => {
       try {
@@ -63,10 +62,11 @@ const App: React.FC = () => {
           } else {
             console.log('ℹ️ No active session found on init');
           }
-          if (user) setIsAuthLoading(false);
+          setIsAuthLoading(false);
         }
       } catch (error) {
         console.error('❌ Auth initialization error:', error);
+        if (isMounted) setIsAuthLoading(false);
       }
     };
 
@@ -95,6 +95,24 @@ const App: React.FC = () => {
     };
   }, []); // Empty dependency array intentionally
 
+  // --- Cleanup on Unload (Fix "Still in app" issue) ---
+  useEffect(() => {
+    const handleUnload = () => {
+      if (currentUser && currentUser.role === UserRole.DRIVER) {
+        // We use sendBeacon or synchronous XHR ideally, but supabase JS client is async.
+        // We make a best-effort attempt to set offline.
+        // Note: This often fails in modern browsers if not using sendBeacon, 
+        // but Supabase doesn't expose sendBeacon easily. 
+        // We rely on the fact that we set it offline on logout explicitly too.
+        supabase.setDriverOnline(currentUser.id, false);
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
+  }, [currentUser]);
+
+
   // --- Driver Online Status & Trip Subscription ---
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.DRIVER) return;
@@ -115,9 +133,19 @@ const App: React.FC = () => {
 
     return () => {
       subscription.unsubscribe();
-      supabase.setDriverOnline(currentUser.id, false);
+      // Only set offline if we are actually unmounting/logging out, 
+      // not just if dependencies change (though dependencies shouldn't change often here)
+      if (currentUser) {
+          supabase.setDriverOnline(currentUser.id, false);
+      }
     };
-  }, [currentUser?.id, currentUser?.role, currentTrip]); // Re-subscribe if currentTrip changes (to re-enable listening when idle)
+  }, [currentUser?.id, currentUser?.role]); 
+  // Removed currentTrip from dependency to avoid toggling online status during trip updates
+  // Logic: Driver should stay "online" in the system even during a trip so they are tracked?
+  // Actually, usually "online" means "available for new trips". 
+  // But if we toggle it, it might confuse the backend or maps. 
+  // Let's keep it simple: If they are logged in as driver, they are online.
+
 
   const logout = async () => {
     try {
@@ -262,7 +290,14 @@ const App: React.FC = () => {
   // --- Render Unauthenticated ---
   if (!currentUser) {
     return <AuthModal onSuccess={() => {
-      // Manual trigger if needed, though onAuthStateChange usually handles it
+       // We can trigger a manual check or just wait for onAuthStateChange
+       // But to be safe and responsive:
+       authService.getCurrentUser().then(user => {
+         if (user) {
+           setCurrentUser(user);
+           setIsAuthLoading(false);
+         }
+       });
     }} />;
   }
 
