@@ -6,12 +6,17 @@ export class WebRTCService {
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
   private tripId: string;
+  private currentUserId: string;
+  private targetUserId: string;
   private onRemoteStreamCallback: ((stream: MediaStream) => void) | null = null;
   private onCallEndCallback: (() => void) | null = null;
   private candidateQueue: RTCIceCandidate[] = [];
+  private subscription: { unsubscribe: () => void } | null = null;
 
-  constructor(tripId: string) {
+  constructor(tripId: string, currentUserId: string, targetUserId: string) {
     this.tripId = tripId;
+    this.currentUserId = currentUserId;
+    this.targetUserId = targetUserId;
   }
 
   async startCall(isCaller: boolean): Promise<MediaStream> {
@@ -46,7 +51,13 @@ export class WebRTCService {
     // 5. Handle ICE Candidates
     this.peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
-        supabase.send(`call-${this.tripId}`, 'candidate', { candidate: event.candidate });
+        supabase.send(
+          `call-${this.tripId}`, 
+          'candidate', 
+          { candidate: event.candidate },
+          this.currentUserId,
+          this.targetUserId
+        );
       }
     };
 
@@ -61,46 +72,66 @@ export class WebRTCService {
     };
 
     // 7. Setup Signaling Listeners
-    supabase.subscribe(`call-${this.tripId}`, async ({ event, payload }) => {
-      if (!this.peerConnection) return;
+    // We listen for signals addressed to US (currentUserId)
+    this.subscription = supabase.subscribeToSignaling(
+      `call-${this.tripId}`, 
+      this.currentUserId,
+      async ({ event, payload }) => {
+        if (!this.peerConnection) return;
 
-      try {
-        if (event === 'offer' && !isCaller) {
-          await this.peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-          await this.processCandidateQueue();
-          const answer = await this.peerConnection.createAnswer();
-          await this.peerConnection.setLocalDescription(answer);
-          supabase.send(`call-${this.tripId}`, 'answer', { sdp: answer });
-        } 
-        else if (event === 'answer' && isCaller) {
-          await this.peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-          await this.processCandidateQueue();
-        } 
-        else if (event === 'candidate') {
-          const candidate = new RTCIceCandidate(payload.candidate);
-          if (this.peerConnection.remoteDescription && this.peerConnection.remoteDescription.type) {
-            try {
-              await this.peerConnection.addIceCandidate(candidate);
-            } catch (e) {
-              console.error("Error adding ice candidate", e);
+        try {
+          if (event === 'offer' && !isCaller) {
+            console.log('[WebRTC] Received offer');
+            await this.peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+            await this.processCandidateQueue();
+            const answer = await this.peerConnection.createAnswer();
+            await this.peerConnection.setLocalDescription(answer);
+            
+            supabase.send(
+              `call-${this.tripId}`, 
+              'answer', 
+              { sdp: answer },
+              this.currentUserId,
+              this.targetUserId
+            );
+          } 
+          else if (event === 'answer' && isCaller) {
+            console.log('[WebRTC] Received answer');
+            await this.peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+            await this.processCandidateQueue();
+          } 
+          else if (event === 'candidate') {
+            const candidate = new RTCIceCandidate(payload.candidate);
+            if (this.peerConnection.remoteDescription && this.peerConnection.remoteDescription.type) {
+              try {
+                await this.peerConnection.addIceCandidate(candidate);
+              } catch (e) {
+                console.error("Error adding ice candidate", e);
+              }
+            } else {
+              this.candidateQueue.push(candidate);
             }
-          } else {
-            this.candidateQueue.push(candidate);
           }
+          else if (event === 'end') {
+            this.endCall(false);
+          }
+        } catch (err) {
+          console.error("Error handling WebRTC event:", event, err);
         }
-        else if (event === 'end') {
-          this.endCall(false);
-        }
-      } catch (err) {
-        console.error("Error handling WebRTC event:", event, err);
       }
-    });
+    );
 
     // 8. If Caller, Create Offer
     if (isCaller) {
       const offer = await this.peerConnection.createOffer();
       await this.peerConnection.setLocalDescription(offer);
-      supabase.send(`call-${this.tripId}`, 'offer', { sdp: offer });
+      supabase.send(
+        `call-${this.tripId}`, 
+        'offer', 
+        { sdp: offer },
+        this.currentUserId,
+        this.targetUserId
+      );
     }
 
     return this.localStream;
@@ -134,8 +165,14 @@ export class WebRTCService {
   }
 
   endCall(emitSignal: boolean = true) {
-    if (emitSignal) {
-      supabase.send(`call-${this.tripId}`, 'end', {});
+    if (emitSignal && this.peerConnection) {
+      supabase.send(
+        `call-${this.tripId}`, 
+        'end', 
+        {},
+        this.currentUserId,
+        this.targetUserId
+      );
     }
 
     if (this.localStream) {
@@ -144,6 +181,10 @@ export class WebRTCService {
 
     if (this.peerConnection) {
       this.peerConnection.close();
+    }
+
+    if (this.subscription) {
+      this.subscription.unsubscribe();
     }
 
     this.peerConnection = null;
