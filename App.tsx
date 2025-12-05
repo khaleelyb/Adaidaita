@@ -35,10 +35,20 @@ const App: React.FC = () => {
 
   // --- Auth Handlers ---
   useEffect(() => {
+    // Prevent double execution in strict mode
     if (authCheckRef.current) return;
     authCheckRef.current = true;
 
     let isMounted = true;
+    let authSubscription: { unsubscribe: () => void } | null = null;
+
+    // Safety timeout: If auth takes too long, stop loading so user isn't stuck
+    const loadingTimeout = setTimeout(() => {
+      if (isMounted && isAuthLoading) {
+        console.warn('⚠️ Auth check timed out. Forcing UI to load.');
+        setIsAuthLoading(false);
+      }
+    }, 3000); // 3 seconds max wait time
 
     const initAuth = async () => {
       try {
@@ -52,27 +62,26 @@ const App: React.FC = () => {
             console.log('✅ User restored:', user.email);
             setCurrentUser(user);
           } else {
-            console.log('ℹ️ No active session found');
+            console.log('ℹ️ No active session found on init');
           }
-          setIsAuthLoading(false);
+          // We don't set loading false here immediately if we want to wait for the listener
+          // But actually, if we found a user, we are good.
+          if (user) setIsAuthLoading(false);
         }
       } catch (error) {
         console.error('❌ Auth initialization error:', error);
-        if (isMounted) {
-          setIsAuthLoading(false);
-        }
+        // Don't stop loading here, let the timeout or the listener handle it to be safe
       }
     };
 
-    initAuth();
-
     // 2. Listen for auth changes (Login, Logout, Auto-refresh)
+    // This often fires immediately with the initial session too
     const { data: { subscription } } = authService.onAuthStateChange((user) => {
       if (!isMounted) return;
       
       console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
       setCurrentUser(user);
-      setIsAuthLoading(false);
+      setIsAuthLoading(false); // Success! Stop loading.
       
       if (!user) {
         // Cleanup on logout
@@ -80,12 +89,16 @@ const App: React.FC = () => {
         setAvailableTrip(null);
       }
     });
+    
+    authSubscription = subscription;
+    initAuth();
 
     return () => {
       isMounted = false;
-      subscription.unsubscribe();
+      clearTimeout(loadingTimeout);
+      if (authSubscription) authSubscription.unsubscribe();
     };
-  }, []);
+  }, []); // Empty dependency array intentionally
 
   // --- Driver Online Status & Trip Subscription ---
   useEffect(() => {
@@ -141,8 +154,6 @@ const App: React.FC = () => {
         }
       });
       
-      // Store subscription cleanup if needed (React handles component unmount cleanup usually)
-
     } catch (error) {
       console.error('Error requesting trip:', error);
     } finally {
@@ -236,6 +247,7 @@ const App: React.FC = () => {
         <div className="text-center space-y-4">
           <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
           <p className="text-white text-xl font-medium">Loading Adaidaita...</p>
+          <p className="text-zinc-500 text-sm">Waiting for secure connection...</p>
         </div>
       </div>
     );
@@ -244,10 +256,8 @@ const App: React.FC = () => {
   // --- Render Unauthenticated ---
   if (!currentUser) {
     return <AuthModal onSuccess={() => {
-      // AuthModal handles success internally now, but we can trigger a manual check if needed
-      // Actually, onAuthStateChange should catch it.
-      // We just need to make sure we don't reload.
-      console.log('Login success callback triggered');
+      // Manual trigger if needed, though onAuthStateChange usually handles it
+      // Intentionally empty to let the effect handle state
     }} />;
   }
 
