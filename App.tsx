@@ -10,6 +10,7 @@ import { RideRequestPanel } from './components/RideRequestPanel';
 import { TripStatusPanel } from './components/TripStatusPanel';
 import { AuthModal } from './components/AuthModal';
 import { Car, MapPin, Navigation } from 'lucide-react';
+import { Button } from './components/Button';
 
 const App: React.FC = () => {
   // Global State
@@ -17,6 +18,7 @@ const App: React.FC = () => {
   const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
   const [availableTrip, setAvailableTrip] = useState<Trip | null>(null); // For drivers
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   
   // UI State
   const [pickupInput, setPickupInput] = useState('Central Market');
@@ -33,50 +35,44 @@ const App: React.FC = () => {
 
   // --- Auth Handlers ---
   useEffect(() => {
-    // Prevent double execution in strict mode
     if (authCheckRef.current) return;
     authCheckRef.current = true;
 
     let isMounted = true;
-    let authSubscription: { unsubscribe: () => void } | null = null;
-
-    // Safety timeout: If auth takes too long, stop loading so user isn't stuck
-    const loadingTimeout = setTimeout(() => {
-      if (isMounted && isAuthLoading) {
-        console.warn('⚠️ Auth check timed out. Forcing UI to load.');
-        setIsAuthLoading(false);
-      }
-    }, 4000); // 4 seconds max wait time
 
     const initAuth = async () => {
       try {
-        console.log('🔐 Initializing authentication...');
+        console.log('馃攼 Initializing authentication...');
         
         // 1. Check for current session immediately
         const user = await authService.getCurrentUser();
         
         if (isMounted) {
           if (user) {
-            console.log('✅ User restored:', user.email);
+            console.log('鉁� User restored:', user.email);
             setCurrentUser(user);
           } else {
-            console.log('ℹ️ No active session found on init');
+            console.log('鈩癸笍 No active session found');
           }
           setIsAuthLoading(false);
         }
       } catch (error) {
-        console.error('❌ Auth initialization error:', error);
-        if (isMounted) setIsAuthLoading(false);
+        console.error('鉂� Auth initialization error:', error);
+        if (isMounted) {
+          setIsAuthLoading(false);
+        }
       }
     };
+
+    initAuth();
 
     // 2. Listen for auth changes (Login, Logout, Auto-refresh)
     const { data: { subscription } } = authService.onAuthStateChange((user) => {
       if (!isMounted) return;
       
-      console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
+      console.log('馃攧 Auth state changed:', user ? user.email : 'Logged out');
       setCurrentUser(user);
-      setIsAuthLoading(false); // Success! Stop loading.
+      setIsAuthLoading(false);
       
       if (!user) {
         // Cleanup on logout
@@ -84,47 +80,25 @@ const App: React.FC = () => {
         setAvailableTrip(null);
       }
     });
-    
-    authSubscription = subscription;
-    initAuth();
 
     return () => {
       isMounted = false;
-      clearTimeout(loadingTimeout);
-      if (authSubscription) authSubscription.unsubscribe();
+      subscription.unsubscribe();
     };
-  }, []); // Empty dependency array intentionally
-
-  // --- Cleanup on Unload (Fix "Still in app" issue) ---
-  useEffect(() => {
-    const handleUnload = () => {
-      if (currentUser && currentUser.role === UserRole.DRIVER) {
-        // We use sendBeacon or synchronous XHR ideally, but supabase JS client is async.
-        // We make a best-effort attempt to set offline.
-        // Note: This often fails in modern browsers if not using sendBeacon, 
-        // but Supabase doesn't expose sendBeacon easily. 
-        // We rely on the fact that we set it offline on logout explicitly too.
-        supabase.setDriverOnline(currentUser.id, false);
-      }
-    };
-    
-    window.addEventListener('beforeunload', handleUnload);
-    return () => window.removeEventListener('beforeunload', handleUnload);
-  }, [currentUser]);
-
+  }, []);
 
   // --- Driver Online Status & Trip Subscription ---
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.DRIVER) return;
 
-    console.log('🚕 Driver detected. Setting online and subscribing...');
+    console.log('馃殨 Driver detected. Setting online and subscribing...');
     
     // 1. Set Online
     supabase.setDriverOnline(currentUser.id, true);
 
     // 2. Subscribe to Available Trips
     const subscription = supabase.subscribeToAvailableTrips((trip) => {
-      console.log('🔔 New trip available:', trip);
+      console.log('馃敂 New trip available:', trip);
       // Only show if driver is not currently in a trip
       if (!currentTrip) {
         setAvailableTrip(trip);
@@ -133,19 +107,9 @@ const App: React.FC = () => {
 
     return () => {
       subscription.unsubscribe();
-      // Only set offline if we are actually unmounting/logging out, 
-      // not just if dependencies change (though dependencies shouldn't change often here)
-      if (currentUser) {
-          supabase.setDriverOnline(currentUser.id, false);
-      }
+      supabase.setDriverOnline(currentUser.id, false);
     };
-  }, [currentUser?.id, currentUser?.role]); 
-  // Removed currentTrip from dependency to avoid toggling online status during trip updates
-  // Logic: Driver should stay "online" in the system even during a trip so they are tracked?
-  // Actually, usually "online" means "available for new trips". 
-  // But if we toggle it, it might confuse the backend or maps. 
-  // Let's keep it simple: If they are logged in as driver, they are online.
-
+  }, [currentUser?.id, currentUser?.role, currentTrip]); // Re-subscribe if currentTrip changes (to re-enable listening when idle)
 
   const logout = async () => {
     try {
@@ -177,6 +141,8 @@ const App: React.FC = () => {
         }
       });
       
+      // Store subscription cleanup if needed (React handles component unmount cleanup usually)
+
     } catch (error) {
       console.error('Error requesting trip:', error);
     } finally {
@@ -227,22 +193,12 @@ const App: React.FC = () => {
 
   // --- WebRTC Handlers ---
   const startCall = async () => {
-    if (!currentTrip || !currentUser) return;
-
-    const targetUserId = currentUser.role === UserRole.RIDER 
-      ? currentTrip.driverId 
-      : currentTrip.riderId;
-      
-    if (!targetUserId) {
-        console.error("Cannot start call: Target user ID missing");
-        alert("Cannot connect call: Counterparty not found.");
-        return;
-    }
+    if (!currentTrip) return;
 
     setIsCallModalOpen(true);
     setIsCalling(true);
 
-    const rtc = new WebRTCService(currentTrip.id, currentUser.id, targetUserId);
+    const rtc = new WebRTCService(currentTrip.id);
     rtcServiceRef.current = rtc;
 
     rtc.onRemoteStream((stream) => {
@@ -263,7 +219,6 @@ const App: React.FC = () => {
       console.error("Failed to start call", err);
       setIsCallModalOpen(false);
       setIsCalling(false);
-      alert("Could not access microphone/camera.");
     }
   };
 
@@ -281,7 +236,6 @@ const App: React.FC = () => {
         <div className="text-center space-y-4">
           <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
           <p className="text-white text-xl font-medium">Loading Adaidaita...</p>
-          <p className="text-zinc-500 text-sm">Waiting for secure connection...</p>
         </div>
       </div>
     );
@@ -290,14 +244,10 @@ const App: React.FC = () => {
   // --- Render Unauthenticated ---
   if (!currentUser) {
     return <AuthModal onSuccess={() => {
-       // We can trigger a manual check or just wait for onAuthStateChange
-       // But to be safe and responsive:
-       authService.getCurrentUser().then(user => {
-         if (user) {
-           setCurrentUser(user);
-           setIsAuthLoading(false);
-         }
-       });
+      // AuthModal handles success internally now, but we can trigger a manual check if needed
+      // Actually, onAuthStateChange should catch it.
+      // We just need to make sure we don't reload.
+      console.log('Login success callback triggered');
     }} />;
   }
 
@@ -330,7 +280,7 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-bold text-zinc-900">New Trip Request!</h3>
-                  <p className="text-sm text-zinc-500">{availableTrip.fare} NGN • 2.5 km</p>
+                  <p className="text-sm text-zinc-500">{availableTrip.fare} NGN 鈥� 2.5 km</p>
                 </div>
               </div>
               <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded-full animate-pulse">
@@ -347,15 +297,6 @@ const App: React.FC = () => {
                 <MapPin size={18} className="text-emerald-500" />
                 <span className="text-sm font-medium">{availableTrip.destination}</span>
               </div>
-              {/* Show rider name if available */}
-              {availableTrip.rider && (
-                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-zinc-100">
-                   <div className="w-6 h-6 bg-zinc-200 rounded-full overflow-hidden">
-                     {availableTrip.rider.avatarUrl && <img src={availableTrip.rider.avatarUrl} alt="" className="w-full h-full object-cover"/>}
-                   </div>
-                   <span className="text-xs font-bold text-zinc-600">{availableTrip.rider.name}</span>
-                </div>
-              )}
             </div>
 
             <div className="flex gap-3">
@@ -420,11 +361,7 @@ const App: React.FC = () => {
           remoteStream={remoteStream}
           onEndCall={endCall}
           isConnecting={isCalling}
-          remoteUserName={
-             currentUser.role === UserRole.RIDER 
-               ? (currentTrip?.driver?.name || "Driver") 
-               : (currentTrip?.rider?.name || "Rider")
-          }
+          remoteUserName={currentUser.role === UserRole.RIDER ? "Driver" : "Rider"}
         />
       )}
     </div>
