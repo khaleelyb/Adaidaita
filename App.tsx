@@ -35,79 +35,93 @@ const App: React.FC = () => {
   // --- Auth Handlers ---
   useEffect(() => {
     let isMounted = true;
-    let authSubscription: { data: { subscription: any } } | null = null;
+    let authSubscription: any = null;
 
     const initAuth = async () => {
       try {
-        console.log('🔐 Initializing authentication...');
+        console.log('🔐 Starting auth initialization...');
         
+        // Add a timeout to prevent infinite loading
+        const timeoutId = setTimeout(() => {
+          if (isMounted && isAuthLoading) {
+            console.warn('⚠️ Auth check timeout - forcing completion');
+            setIsAuthLoading(false);
+          }
+        }, 5000);
+
         // Check for current session
         const user = await authService.getCurrentUser();
         
-        if (isMounted) {
-          if (user) {
-            console.log('✅ User restored:', user.email);
-            setCurrentUser(user);
-          } else {
-            console.log('ℹ️ No active session found');
-          }
-          setIsAuthLoading(false);
+        clearTimeout(timeoutId);
+
+        if (!isMounted) return;
+
+        if (user) {
+          console.log('✅ User session restored:', user.email);
+          setCurrentUser(user);
+        } else {
+          console.log('ℹ️ No active session - showing login');
         }
+        setIsAuthLoading(false);
+
       } catch (error) {
         console.error('❌ Auth initialization error:', error);
         if (isMounted) {
           setIsAuthLoading(false);
-          setAuthError('Failed to initialize authentication');
+          setAuthError('Failed to load. Please try again.');
         }
       }
     };
 
-    // Initialize auth
+    // Run auth check
     initAuth();
 
-    // Listen for auth changes
-    authSubscription = authService.onAuthStateChange((user) => {
-      if (!isMounted) return;
-      
-      console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
-      setCurrentUser(user);
-      setIsAuthLoading(false);
-      
-      if (!user) {
-        // Cleanup on logout
-        setCurrentTrip(null);
-        setAvailableTrip(null);
-      }
-    });
+    // Setup auth state listener
+    const setupAuthListener = async () => {
+      authSubscription = authService.onAuthStateChange((user) => {
+        if (!isMounted) return;
+        
+        console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
+        setCurrentUser(user);
+        
+        if (!user) {
+          setCurrentTrip(null);
+          setAvailableTrip(null);
+        }
+      });
+    };
+
+    setupAuthListener();
 
     return () => {
       isMounted = false;
-      if (authSubscription) {
+      if (authSubscription?.data?.subscription) {
         authSubscription.data.subscription.unsubscribe();
       }
     };
-  }, []); // Empty dependency array is fine here
+  }, []);
 
   // --- Driver Online Status & Trip Subscription ---
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.DRIVER) return;
 
-    console.log('🚗 Driver detected. Setting online and subscribing...');
+    console.log('🚗 Setting up driver mode...');
     
     let subscription: { unsubscribe: () => void } | null = null;
 
     const setupDriver = async () => {
-      // Set driver online
-      await supabase.setDriverOnline(currentUser.id, true);
+      try {
+        await supabase.setDriverOnline(currentUser.id, true);
 
-      // Subscribe to available trips
-      subscription = supabase.subscribeToAvailableTrips((trip) => {
-        console.log('📢 New trip available:', trip);
-        // Only show if driver is not currently in a trip
-        if (!currentTrip) {
-          setAvailableTrip(trip);
-        }
-      });
+        subscription = supabase.subscribeToAvailableTrips((trip) => {
+          console.log('📢 New trip available:', trip);
+          if (!currentTrip) {
+            setAvailableTrip(trip);
+          }
+        });
+      } catch (error) {
+        console.error('Error setting up driver:', error);
+      }
     };
 
     setupDriver();
@@ -116,9 +130,7 @@ const App: React.FC = () => {
       if (subscription) {
         subscription.unsubscribe();
       }
-      if (currentUser) {
-        supabase.setDriverOnline(currentUser.id, false);
-      }
+      supabase.setDriverOnline(currentUser.id, false).catch(console.error);
     };
   }, [currentUser?.id, currentUser?.role, currentTrip]);
 
@@ -143,8 +155,7 @@ const App: React.FC = () => {
       const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
       setCurrentTrip(trip);
 
-      // Subscribe to this specific trip updates
-      const sub = supabase.subscribe(`trip-${trip.id}`, (data) => {
+      supabase.subscribe(`trip-${trip.id}`, (data) => {
         if (data.event === 'trip_updated') {
           setCurrentTrip(data.payload.trip);
         } else if (data.event === 'location_update') {
@@ -169,7 +180,6 @@ const App: React.FC = () => {
         setCurrentTrip(trip);
         setAvailableTrip(null);
 
-        // Subscribe to updates for this trip
         supabase.subscribe(`trip-${trip.id}`, (data) => {
           if (data.event === 'trip_updated') {
             setCurrentTrip(data.payload.trip);
@@ -200,20 +210,42 @@ const App: React.FC = () => {
 
   // --- WebRTC Handlers ---
   const startCall = async () => {
-    if (!currentTrip) return;
+    if (!currentTrip || !currentUser) return;
+
+    // Determine who we're calling
+    const isRider = currentUser.role === UserRole.RIDER;
+    const targetUserId = isRider ? currentTrip.driverId : currentTrip.riderId;
+
+    if (!targetUserId) {
+      console.error('Cannot start call: missing target user ID');
+      return;
+    }
+
+    console.log('📞 Starting call...', {
+      from: currentUser.id,
+      to: targetUserId,
+      tripId: currentTrip.id
+    });
 
     setIsCallModalOpen(true);
     setIsCalling(true);
 
-    const rtc = new WebRTCService(currentTrip.id);
+    // Create WebRTC service with proper user IDs
+    const rtc = new WebRTCService(
+      currentTrip.id,
+      currentUser.id,
+      targetUserId
+    );
     rtcServiceRef.current = rtc;
 
     rtc.onRemoteStream((stream) => {
+      console.log('✅ Remote stream received');
       setRemoteStream(stream);
       setIsCalling(false);
     });
 
     rtc.onCallEnd(() => {
+      console.log('📞 Call ended');
       setIsCallModalOpen(false);
       setLocalStream(null);
       setRemoteStream(null);
@@ -222,10 +254,12 @@ const App: React.FC = () => {
     try {
       const stream = await rtc.startCall(true);
       setLocalStream(stream);
+      console.log('✅ Local stream started');
     } catch (err) {
-      console.error("Failed to start call", err);
+      console.error("Failed to start call:", err);
       setIsCallModalOpen(false);
       setIsCalling(false);
+      alert('Failed to access camera/microphone. Please check permissions.');
     }
   };
 
@@ -243,6 +277,7 @@ const App: React.FC = () => {
         <div className="text-center space-y-4">
           <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
           <p className="text-white text-xl font-medium">Loading Adaidaita...</p>
+          <p className="text-zinc-500 text-sm">This shouldn't take long...</p>
         </div>
       </div>
     );
@@ -254,13 +289,17 @@ const App: React.FC = () => {
       <div className="min-h-screen bg-zinc-900 flex items-center justify-center p-6">
         <div className="text-center space-y-4 max-w-md">
           <div className="text-red-500 text-6xl mb-4">⚠️</div>
-          <h2 className="text-white text-2xl font-bold">Authentication Error</h2>
+          <h2 className="text-white text-2xl font-bold">Something Went Wrong</h2>
           <p className="text-zinc-400">{authError}</p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              setAuthError(null);
+              setIsAuthLoading(true);
+              window.location.reload();
+            }}
             className="mt-4 px-6 py-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-colors"
           >
-            Reload App
+            Try Again
           </button>
         </div>
       </div>
@@ -270,7 +309,7 @@ const App: React.FC = () => {
   // --- Render Unauthenticated ---
   if (!currentUser) {
     return <AuthModal onSuccess={() => {
-      console.log('Login success callback triggered');
+      console.log('✅ Login successful');
     }} />;
   }
 
