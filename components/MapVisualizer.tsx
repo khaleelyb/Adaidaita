@@ -88,8 +88,11 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   
-  // Default center
+  // Viewport center
   const [mapCenter, setMapCenter] = useState<[number, number]>([INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng]);
+  
+  // Persistent pickup location coordinates
+  const [pickupCoords, setPickupCoords] = useState<[number, number]>([INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng]);
 
   // Update map center when driver moves
   useEffect(() => {
@@ -104,7 +107,9 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
     }
     const coords = MOCKED_LOCATIONS[loc];
     if (coords) {
-      setMapCenter([coords.lat, coords.lng]);
+      const newCoords: [number, number] = [coords.lat, coords.lng];
+      setPickupCoords(newCoords);
+      setMapCenter(newCoords);
     }
     setSearchQuery("");
     setIsSearchOpen(false);
@@ -140,15 +145,13 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
           </Marker>
         )}
 
-        {/* Pickup Marker (if static location is selected) */}
-        {!driverLocation && (
-          <Marker 
-            position={mapCenter} 
-            icon={createPickupIcon()}
-          >
-            <Popup className="font-semibold">{pickup || "Current Location"}</Popup>
-          </Marker>
-        )}
+        {/* Pickup Marker - Always show if we have coordinates */}
+        <Marker 
+          position={pickupCoords} 
+          icon={createPickupIcon()}
+        >
+          <Popup className="font-semibold">{pickup || "Pickup Location"}</Popup>
+        </Marker>
       </MapContainer>
 
       {/* Searching Pulse Animation Overlay */}

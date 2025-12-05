@@ -50,6 +50,7 @@ export class AuthService {
       log.success('User created', { id: authData.user.id });
 
       // Create profile
+      // Note: In production, this should ideally be handled by a Database Trigger
       try {
         const { error: profileError } = await supabase
           .from('users')
@@ -61,7 +62,7 @@ export class AuthService {
             avatar_url: `https://i.pravatar.cc/150?u=${email}`
           });
 
-        if (profileError && profileError.code !== '23505') {
+        if (profileError && profileError.code !== '23505') { // 23505 is unique violation (already exists)
           log.warn('Profile creation warning', profileError);
         }
       } catch (err) {
@@ -105,21 +106,23 @@ export class AuthService {
         email: data.user.email 
       });
 
-      // Verify profile exists
-      setTimeout(() => {
-        this.getUserProfile(data.user.id).then(profile => {
-          if (!profile) {
-            log.warn('Profile missing after login, creating...');
-            this.createUserProfile(data.user);
-          }
-        });
-      }, 500);
+      // Attempt to ensure profile exists
+      this.ensureProfile(data.user);
 
       return data;
     } catch (error: any) {
       log.error('Sign in error', error);
       throw error;
     }
+  }
+
+  // Helper to ensure profile exists or create if missing (non-blocking)
+  private async ensureProfile(user: any) {
+     const profile = await this.getUserProfile(user.id);
+     if (!profile) {
+       log.warn('Profile missing after login, creating...');
+       await this.createUserProfile(user);
+     }
   }
 
   // Sign out
@@ -179,7 +182,7 @@ export class AuthService {
 
       if (error) {
         if (error.code === 'PGRST116') {
-          log.warn('Profile not found for user', userId);
+          // Row not found
           return null;
         }
         log.error('Error fetching profile', error);
@@ -214,7 +217,7 @@ export class AuthService {
         profile = await this.createUserProfile(session.user);
         
         if (!profile) {
-          // Fallback to session metadata
+          // Fallback to session metadata if database creation fails
           log.warn('Using session metadata as fallback');
           const metadata = session.user.user_metadata || {};
           
