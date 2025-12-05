@@ -1,6 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { injectSpeedInsights } from '@vercel/speed-insights';
 import App from './App';
+
+// Inject Vercel Speed Insights (client-side only)
+injectSpeedInsights();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
