@@ -32,6 +32,10 @@ const App: React.FC = () => {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const rtcServiceRef = useRef<WebRTCService | null>(null);
 
+  // Refs for callbacks to avoid stale closures
+  const currentTripRef = useRef<Trip | null>(null);
+  useEffect(() => { currentTripRef.current = currentTrip; }, [currentTrip]);
+
   // --- Auth Handlers ---
   useEffect(() => {
     let isMounted = true;
@@ -115,7 +119,8 @@ const App: React.FC = () => {
 
         subscription = supabase.subscribeToAvailableTrips((trip) => {
           console.log('📢 New trip available:', trip);
-          if (!currentTrip) {
+          // Use ref to check current trip status without re-subscribing
+          if (!currentTripRef.current) {
             setAvailableTrip(trip);
           }
         });
@@ -132,7 +137,7 @@ const App: React.FC = () => {
       }
       supabase.setDriverOnline(currentUser.id, false).catch(console.error);
     };
-  }, [currentUser?.id, currentUser?.role, currentTrip]);
+  }, [currentUser?.id, currentUser?.role]); // Removed currentTrip dependency to avoid re-subscription loop
 
   const logout = async () => {
     try {
@@ -155,6 +160,7 @@ const App: React.FC = () => {
       const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
       setCurrentTrip(trip);
 
+      // Subscribe to trip updates
       supabase.subscribe(`trip-${trip.id}`, (data) => {
         if (data.event === 'trip_updated') {
           setCurrentTrip(data.payload.trip);
@@ -313,6 +319,8 @@ const App: React.FC = () => {
     }} />;
   }
 
+  const mapPickup = currentTrip?.pickup || (pickupInput && isRequesting ? pickupInput : pickupInput);
+
   // --- Render Authenticated App ---
   return (
     <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans">
@@ -325,7 +333,7 @@ const App: React.FC = () => {
         <MapVisualizer 
           role={currentUser.role} 
           driverLocation={currentTrip?.driverLocation}
-          pickup={currentTrip?.pickup || (pickupInput && isRequesting ? pickupInput : pickupInput)}
+          pickup={mapPickup}
           isSearching={currentTrip?.status === TripStatus.SEARCHING}
           onLocationSelect={setPickupInput}
         />
