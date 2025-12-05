@@ -11,8 +11,10 @@ export class WebRTCService {
   private onRemoteStreamCallback: ((stream: MediaStream) => void) | null = null;
   private onCallEndCallback: (() => void) | null = null;
   private candidateQueue: RTCIceCandidate[] = [];
+  private signalQueue: any[] = [];
   private channel: any = null;
   private isInitiator: boolean = false;
+  private isReady: boolean = false;
 
   constructor(tripId: string, currentUserId: string, targetUserId: string) {
     this.tripId = tripId;
@@ -60,6 +62,8 @@ export class WebRTCService {
       iceServers: ICE_SERVERS,
       iceCandidatePoolSize: 10
     });
+    
+    this.isReady = true;
 
     // 4. Add Local Tracks
     this.localStream.getTracks().forEach(track => {
@@ -113,10 +117,13 @@ export class WebRTCService {
       console.log('[WebRTC] 🔄 Connection state:', this.peerConnection?.connectionState);
     };
 
-    // 8. Wait a moment for channel to be ready
+    // 8. Process any queued signals
+    await this.processSignalQueue();
+
+    // 9. Wait a moment for channel to be ready
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // 9. If Caller, Create Offer
+    // 10. If Caller, Create Offer
     if (isCaller) {
       await this.createAndSendOffer();
     } else {
@@ -197,24 +204,46 @@ export class WebRTCService {
 
     console.log(`[WebRTC] 📨 Received signal: ${signal.type} from ${signal.from.substring(0, 8)}`);
 
-    if (!this.peerConnection) {
-      console.warn('[WebRTC] ⚠️ Received signal but peer connection not ready');
+    if (!this.isReady || !this.peerConnection) {
+      console.warn('[WebRTC] ⚠️ Received signal but peer connection not ready, queueing...');
+      this.signalQueue.push(signal);
       return;
     }
 
     try {
-      if (signal.type === 'offer' && !this.isInitiator) {
-        await this.handleOffer(signal.data);
-      } else if (signal.type === 'answer' && this.isInitiator) {
-        await this.handleAnswer(signal.data);
-      } else if (signal.type === 'candidate') {
-        await this.handleCandidate(signal.data);
-      } else if (signal.type === 'end') {
-        console.log('[WebRTC] 📞 Call ended by remote peer');
-        this.endCall(false);
-      }
+      await this.processSignal(signal);
     } catch (error) {
       console.error(`[WebRTC] ❌ Error handling ${signal.type}:`, error);
+    }
+  }
+
+  private async processSignalQueue() {
+    if (this.signalQueue.length === 0) return;
+    
+    console.log(`[WebRTC] 📦 Processing ${this.signalQueue.length} queued signals`);
+    
+    const queue = [...this.signalQueue];
+    this.signalQueue = [];
+    
+    for (const signal of queue) {
+      try {
+        await this.processSignal(signal);
+      } catch (error) {
+        console.error(`[WebRTC] ❌ Error processing queued signal ${signal.type}:`, error);
+      }
+    }
+  }
+
+  private async processSignal(signal: any) {
+    if (signal.type === 'offer' && !this.isInitiator) {
+      await this.handleOffer(signal.data);
+    } else if (signal.type === 'answer' && this.isInitiator) {
+      await this.handleAnswer(signal.data);
+    } else if (signal.type === 'candidate') {
+      await this.handleCandidate(signal.data);
+    } else if (signal.type === 'end') {
+      console.log('[WebRTC] 📞 Call ended by remote peer');
+      this.endCall(false);
     }
   }
 
@@ -333,6 +362,8 @@ export class WebRTCService {
   endCall(sendSignal: boolean = true) {
     console.log('[WebRTC] 📵 Ending call...', { sendSignal });
 
+    this.isReady = false;
+
     // Send end signal to remote peer
     if (sendSignal && this.channel) {
       this.sendSignal('end', {});
@@ -364,6 +395,7 @@ export class WebRTCService {
     // Clear state
     this.remoteStream = null;
     this.candidateQueue = [];
+    this.signalQueue = [];
 
     console.log('[WebRTC] ✅ Call cleanup complete');
 
@@ -372,4 +404,4 @@ export class WebRTCService {
       this.onCallEndCallback();
     }
   }
-            }
+}
