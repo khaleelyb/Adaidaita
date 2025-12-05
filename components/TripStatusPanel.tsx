@@ -40,6 +40,19 @@ export const TripStatusPanel: React.FC<TripStatusPanelProps> = ({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Get dynamic display names
+  const otherPartyName = isDriver 
+    ? (trip.rider?.name || "Passenger") 
+    : (trip.driver?.name || "Driver");
+    
+  const vehicleInfo = isDriver
+    ? ""
+    : (trip.driver?.vehicleModel || "Vehicle Info");
+
+  const otherPartyRating = isDriver
+    ? (trip.rider?.rating || 5.0).toFixed(1)
+    : (trip.driver?.rating || 4.9).toFixed(1);
+
   // --- RENDER SEARCHING STATE ---
   if (trip.status === TripStatus.SEARCHING) {
     if (isDriver) {
@@ -78,6 +91,22 @@ export const TripStatusPanel: React.FC<TripStatusPanelProps> = ({
                 <p className="font-semibold text-zinc-800">{trip.destination}</p>
               </div>
             </div>
+            
+             {/* Rider Name in Request (if available) */}
+             {trip.rider && (
+               <div className="flex items-center pt-2 border-t border-zinc-100 mt-2">
+                 <div className="w-8 h-8 rounded-full bg-zinc-200 overflow-hidden mr-3">
+                   {trip.rider.avatarUrl && <img src={trip.rider.avatarUrl} alt="Rider" className="w-full h-full object-cover" />}
+                 </div>
+                 <div>
+                   <p className="text-sm font-bold text-zinc-800">{trip.rider.name}</p>
+                   <div className="flex items-center text-xs text-zinc-500">
+                     <Star size={10} className="fill-amber-400 text-amber-400 mr-1" />
+                     {trip.rider.rating || 5.0}
+                   </div>
+                 </div>
+               </div>
+             )}
           </div>
 
           {/* Action Buttons */}
@@ -211,20 +240,22 @@ export const TripStatusPanel: React.FC<TripStatusPanelProps> = ({
               {currentStatus.icon}
               <span className="ml-1.5">{currentStatus.label}</span>
             </div>
+            
             <h3 className="text-xl font-bold text-zinc-900 mb-1">
-              {isDriver ? "Passenger: Alice" : "Toyota Corolla"}
+              {isDriver ? `Passenger: ${otherPartyName}` : (vehicleInfo || otherPartyName)}
             </h3>
+            
             <p className="text-zinc-500 text-sm flex items-center">
               {isDriver ? (
                 <>
                   <Star size={14} className="fill-amber-400 text-amber-400 mr-1" />
-                  4.9 Rating
+                  {otherPartyRating} Rating
                 </>
               ) : (
                 <>
-                  KAN-552 • Bob Driver
+                  {trip.driver?.vehiclePlate ? `${trip.driver.vehiclePlate} • ` : ''} {otherPartyName}
                   <Star size={14} className="fill-amber-400 text-amber-400 ml-2 mr-1" />
-                  4.8
+                  {otherPartyRating}
                 </>
               )}
             </p>
