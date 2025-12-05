@@ -16,7 +16,7 @@ const App: React.FC = () => {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentTrip, setCurrentTrip] = useState<Trip | null>(null);
-  const [availableTrip, setAvailableTrip] = useState<Trip | null>(null); // For drivers
+  const [availableTrip, setAvailableTrip] = useState<Trip | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   
@@ -31,46 +31,45 @@ const App: React.FC = () => {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const rtcServiceRef = useRef<WebRTCService | null>(null);
-  const authCheckRef = useRef(false);
 
   // --- Auth Handlers ---
   useEffect(() => {
-    if (authCheckRef.current) return;
-    authCheckRef.current = true;
-
     let isMounted = true;
+    let authSubscription: { data: { subscription: any } } | null = null;
 
     const initAuth = async () => {
       try {
-        console.log('馃攼 Initializing authentication...');
+        console.log('🔐 Initializing authentication...');
         
-        // 1. Check for current session immediately
+        // Check for current session
         const user = await authService.getCurrentUser();
         
         if (isMounted) {
           if (user) {
-            console.log('鉁� User restored:', user.email);
+            console.log('✅ User restored:', user.email);
             setCurrentUser(user);
           } else {
-            console.log('鈩癸笍 No active session found');
+            console.log('ℹ️ No active session found');
           }
           setIsAuthLoading(false);
         }
       } catch (error) {
-        console.error('鉂� Auth initialization error:', error);
+        console.error('❌ Auth initialization error:', error);
         if (isMounted) {
           setIsAuthLoading(false);
+          setAuthError('Failed to initialize authentication');
         }
       }
     };
 
+    // Initialize auth
     initAuth();
 
-    // 2. Listen for auth changes (Login, Logout, Auto-refresh)
-    const { data: { subscription } } = authService.onAuthStateChange((user) => {
+    // Listen for auth changes
+    authSubscription = authService.onAuthStateChange((user) => {
       if (!isMounted) return;
       
-      console.log('馃攧 Auth state changed:', user ? user.email : 'Logged out');
+      console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
       setCurrentUser(user);
       setIsAuthLoading(false);
       
@@ -83,33 +82,45 @@ const App: React.FC = () => {
 
     return () => {
       isMounted = false;
-      subscription.unsubscribe();
+      if (authSubscription) {
+        authSubscription.data.subscription.unsubscribe();
+      }
     };
-  }, []);
+  }, []); // Empty dependency array is fine here
 
   // --- Driver Online Status & Trip Subscription ---
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.DRIVER) return;
 
-    console.log('馃殨 Driver detected. Setting online and subscribing...');
+    console.log('🚗 Driver detected. Setting online and subscribing...');
     
-    // 1. Set Online
-    supabase.setDriverOnline(currentUser.id, true);
+    let subscription: { unsubscribe: () => void } | null = null;
 
-    // 2. Subscribe to Available Trips
-    const subscription = supabase.subscribeToAvailableTrips((trip) => {
-      console.log('馃敂 New trip available:', trip);
-      // Only show if driver is not currently in a trip
-      if (!currentTrip) {
-        setAvailableTrip(trip);
-      }
-    });
+    const setupDriver = async () => {
+      // Set driver online
+      await supabase.setDriverOnline(currentUser.id, true);
+
+      // Subscribe to available trips
+      subscription = supabase.subscribeToAvailableTrips((trip) => {
+        console.log('📢 New trip available:', trip);
+        // Only show if driver is not currently in a trip
+        if (!currentTrip) {
+          setAvailableTrip(trip);
+        }
+      });
+    };
+
+    setupDriver();
 
     return () => {
-      subscription.unsubscribe();
-      supabase.setDriverOnline(currentUser.id, false);
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+      if (currentUser) {
+        supabase.setDriverOnline(currentUser.id, false);
+      }
     };
-  }, [currentUser?.id, currentUser?.role, currentTrip]); // Re-subscribe if currentTrip changes (to re-enable listening when idle)
+  }, [currentUser?.id, currentUser?.role, currentTrip]);
 
   const logout = async () => {
     try {
@@ -141,8 +152,6 @@ const App: React.FC = () => {
         }
       });
       
-      // Store subscription cleanup if needed (React handles component unmount cleanup usually)
-
     } catch (error) {
       console.error('Error requesting trip:', error);
     } finally {
@@ -158,7 +167,7 @@ const App: React.FC = () => {
       const trip = await supabase.acceptTrip(availableTrip.id, currentUser.id);
       if (trip) {
         setCurrentTrip(trip);
-        setAvailableTrip(null); // Clear notification
+        setAvailableTrip(null);
 
         // Subscribe to updates for this trip
         supabase.subscribe(`trip-${trip.id}`, (data) => {
@@ -177,14 +186,12 @@ const App: React.FC = () => {
     if (!currentTrip) return;
 
     if (status === TripStatus.IDLE) {
-      // Completed or Cancelled -> Reset
       setCurrentTrip(null);
       return;
     }
     
     try {
       await supabase.updateTripStatus(currentTrip.id, status);
-      // Optimistic update
       setCurrentTrip(prev => prev ? ({ ...prev, status }) : null);
     } catch (error) {
       console.error('Error updating trip status:', error);
@@ -241,12 +248,28 @@ const App: React.FC = () => {
     );
   }
 
+  // --- Auth Error State ---
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-zinc-900 flex items-center justify-center p-6">
+        <div className="text-center space-y-4 max-w-md">
+          <div className="text-red-500 text-6xl mb-4">⚠️</div>
+          <h2 className="text-white text-2xl font-bold">Authentication Error</h2>
+          <p className="text-zinc-400">{authError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-4 px-6 py-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-colors"
+          >
+            Reload App
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // --- Render Unauthenticated ---
   if (!currentUser) {
     return <AuthModal onSuccess={() => {
-      // AuthModal handles success internally now, but we can trigger a manual check if needed
-      // Actually, onAuthStateChange should catch it.
-      // We just need to make sure we don't reload.
       console.log('Login success callback triggered');
     }} />;
   }
@@ -280,7 +303,7 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-bold text-zinc-900">New Trip Request!</h3>
-                  <p className="text-sm text-zinc-500">{availableTrip.fare} NGN 鈥� 2.5 km</p>
+                  <p className="text-sm text-zinc-500">{availableTrip.fare} NGN • 2.5 km</p>
                 </div>
               </div>
               <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded-full animate-pulse">
