@@ -10,11 +10,73 @@ class SupabaseService {
   private locationInterval: any = null;
 
   /**
-   * Subscribe to real-time updates for trips and driver locations
+   * Set driver online status
+   */
+  async setDriverOnline(driverId: string, isOnline: boolean) {
+    try {
+      console.log(`[Supabase] Setting driver ${driverId} online status: ${isOnline}`);
+      const { error } = await supabaseClient
+        .from('users')
+        .update({ is_online: isOnline })
+        .eq('id', driverId);
+
+      if (error) {
+        console.error('[Supabase] ❌ Failed to update driver online status:', error);
+      }
+    } catch (error) {
+      console.error('[Supabase] ❌ Error updating driver online status:', error);
+    }
+  }
+
+  /**
+   * Subscribe to available trips (for Drivers)
+   */
+  subscribeToAvailableTrips(callback: (trip: Trip) => void) {
+    console.log('[Supabase] 📡 Subscribing to available trips...');
+    const channelName = 'available-trips';
+
+    const channel = supabaseClient
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'trips',
+          filter: `status=eq.${TripStatus.SEARCHING}`
+        },
+        (payload) => {
+          console.log('[Supabase] 🔔 New trip request received:', payload);
+          if (payload.new) {
+            callback(this.mapTrip(payload.new));
+          }
+        }
+      )
+      .subscribe();
+
+    this.channels.set(channelName, channel);
+
+    return {
+      unsubscribe: () => {
+        console.log(`[Supabase] 🔌 Unsubscribing from ${channelName}`);
+        supabaseClient.removeChannel(channel);
+        this.channels.delete(channelName);
+      }
+    };
+  }
+
+  /**
+   * Subscribe to real-time updates for a specific trip and driver locations
    */
   subscribe(channelName: string, callback: SubscriptionCallback) {
     console.log(`[Supabase] 📡 Subscribing to ${channelName}`);
     
+    // Clean up existing channel if it exists to prevent duplicates
+    if (this.channels.has(channelName)) {
+      supabaseClient.removeChannel(this.channels.get(channelName)!);
+      this.channels.delete(channelName);
+    }
+
     const channel = supabaseClient
       .channel(channelName)
       .on(
@@ -28,6 +90,7 @@ class SupabaseService {
           console.log('[Supabase] 🔄 Trip update received:', payload);
           
           if (payload.new) {
+            // Fetch full trip details to get related rider/driver info
             const trip = await this.getTripById(payload.new.id);
             if (trip) {
               callback({
@@ -46,8 +109,7 @@ class SupabaseService {
           table: 'driver_locations'
         },
         (payload) => {
-          console.log('[Supabase] 📍 Driver location update:', payload);
-          
+          // console.log('[Supabase] 📍 Driver location update:', payload);
           if (payload.new) {
             callback({
               event: 'location_update',
@@ -107,17 +169,46 @@ class SupabaseService {
       }
 
       console.log('[Supabase] ✅ Trip created:', data);
-
-      // Auto-assign driver after 3 seconds (simulating nearby driver search)
-      setTimeout(() => {
-        console.log('[Supabase] 🔍 Searching for nearby driver...');
-        this.autoAssignDriver(data.id);
-      }, 3000);
-
       return this.mapTrip(data);
     } catch (error: any) {
       console.error('[Supabase] ❌ Create trip error:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Driver accepts a trip
+   */
+  async acceptTrip(tripId: string, driverId: string): Promise<Trip | null> {
+    try {
+      console.log('[Supabase] 🤝 Accepting trip...', { tripId, driverId });
+
+      const { data, error } = await supabaseClient
+        .from('trips')
+        .update({
+          driver_id: driverId,
+          status: TripStatus.ACCEPTED,
+          accepted_at: new Date().toISOString()
+        })
+        .eq('id', tripId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[Supabase] ❌ Accept trip failed:', error);
+        return null;
+      }
+
+      console.log('[Supabase] ✅ Trip accepted:', data);
+      
+      // Initialize driver location and start updates
+      await this.initializeDriverLocation(driverId);
+      this.startLocationUpdates(driverId);
+
+      return this.mapTrip(data);
+    } catch (error) {
+      console.error('[Supabase] ❌ Accept trip error:', error);
+      return null;
     }
   }
 
@@ -164,7 +255,7 @@ class SupabaseService {
   /**
    * Get trip by ID
    */
-  private async getTripById(tripId: string): Promise<Trip | null> {
+  async getTripById(tripId: string): Promise<Trip | null> {
     try {
       const { data, error } = await supabaseClient
         .from('trips')
@@ -185,79 +276,6 @@ class SupabaseService {
     } catch (error) {
       console.error('[Supabase] ❌ Get trip by ID error:', error);
       return null;
-    }
-  }
-
-  /**
-   * Auto-assign available driver to trip
-   */
-  private async autoAssignDriver(tripId: string) {
-    try {
-      console.log('[Supabase] 🔍 Looking for available driver...');
-      
-      // Find an online driver
-      const { data: drivers, error: driverError } = await supabaseClient
-        .from('users')
-        .select('id, name, email')
-        .eq('role', 'DRIVER')
-        .eq('is_online', true)
-        .limit(1);
-
-      if (driverError) {
-        console.error('[Supabase] ❌ Error finding driver:', driverError);
-        return;
-      }
-
-      if (!drivers || drivers.length === 0) {
-        console.warn('[Supabase] ⚠️ No online drivers available. Using default driver...');
-        // Use Bob as default driver
-        const driverId = '22222222-2222-2222-2222-222222222222';
-        await this.assignDriverToTrip(tripId, driverId);
-        return;
-      }
-
-      const driver = drivers[0];
-      console.log('[Supabase] 👤 Found driver:', driver.name);
-      await this.assignDriverToTrip(tripId, driver.id);
-      
-    } catch (error) {
-      console.error('[Supabase] ❌ Auto-assign driver error:', error);
-    }
-  }
-
-  /**
-   * Assign specific driver to trip
-   */
-  private async assignDriverToTrip(tripId: string, driverId: string) {
-    try {
-      console.log('[Supabase] 🎯 Assigning driver to trip...', { tripId, driverId });
-      
-      const { data, error } = await supabaseClient
-        .from('trips')
-        .update({
-          driver_id: driverId,
-          status: TripStatus.ACCEPTED,
-          accepted_at: new Date().toISOString()
-        })
-        .eq('id', tripId)
-        .select()
-        .single();
-
-      if (error) {
-        console.error('[Supabase] ❌ Driver assignment failed:', error);
-        return;
-      }
-
-      console.log('[Supabase] ✅ Driver assigned successfully!', data);
-
-      // Initialize driver location if not exists
-      await this.initializeDriverLocation(driverId);
-      
-      // Start simulating driver movement
-      this.startLocationUpdates(driverId);
-      
-    } catch (error) {
-      console.error('[Supabase] ❌ Assign driver to trip error:', error);
     }
   }
 
@@ -331,9 +349,9 @@ class SupabaseService {
           });
 
         if (error) {
-          console.error('[Supabase] ❌ Location update failed:', error);
+          // console.error('[Supabase] ❌ Location update failed:', error);
         } else {
-          console.log('[Supabase] 📍 Driver location updated:', { lat: lat.toFixed(6), lng: lng.toFixed(6) });
+          // console.log('[Supabase] 📍 Driver location updated');
         }
       } catch (error) {
         console.error('[Supabase] ❌ Location update error:', error);
@@ -363,7 +381,12 @@ class SupabaseService {
       pickup: data.pickup_location,
       destination: data.destination_location,
       status: data.status,
-      fare: data.fare
+      fare: data.fare,
+      driverLocation: data.driver_locations ? {
+        lat: data.driver_locations.lat,
+        lng: data.driver_locations.lng,
+        bearing: data.driver_locations.bearing
+      } : undefined
     };
   }
 
@@ -371,22 +394,22 @@ class SupabaseService {
    * WebRTC Signaling - Send signal
    */
   send(channelName: string, event: string, payload: any) {
-    console.log('[Supabase] 📞 Sending WebRTC signal:', { event, channelName });
+    // console.log('[Supabase] 📞 Sending WebRTC signal:', { event, channelName });
     
     if (channelName.startsWith('call-')) {
       const tripId = channelName.replace('call-', '');
       
+      // Use dummy IDs for signaling table to avoid FK constraints if users aren't fully set up in both tables
+      // Ideally these should be real UUIDs from the users table
       supabaseClient.from('call_signals').insert({
         trip_id: tripId,
         signal_type: event,
         signal_data: payload,
-        from_user_id: '11111111-1111-1111-1111-111111111111',
+        from_user_id: '11111111-1111-1111-1111-111111111111', 
         to_user_id: '22222222-2222-2222-2222-222222222222'
       }).then(({ error }) => {
         if (error) {
           console.error('[Supabase] ❌ Signal send failed:', error);
-        } else {
-          console.log('[Supabase] ✅ Signal sent successfully');
         }
       });
     }
