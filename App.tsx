@@ -9,7 +9,7 @@ import { Header } from './components/Header';
 import { RideRequestPanel } from './components/RideRequestPanel';
 import { TripStatusPanel } from './components/TripStatusPanel';
 import { AuthModal } from './components/AuthModal';
-import { Car, MapPin, Navigation } from 'lucide-react';
+import { Car, MapPin, Navigation, Phone } from 'lucide-react';
 import { Button } from './components/Button';
 
 const App: React.FC = () => {
@@ -26,13 +26,14 @@ const App: React.FC = () => {
   const [isRequesting, setIsRequesting] = useState(false);
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
+  const [hasIncomingCall, setHasIncomingCall] = useState(false);
   
   // WebRTC State
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const rtcServiceRef = useRef<WebRTCService | null>(null);
   
-  // Refs to track if we're mounted
+  // Refs
   const isMounted = useRef(true);
   const authSubscriptionRef = useRef<any>(null);
 
@@ -44,7 +45,6 @@ const App: React.FC = () => {
       try {
         console.log('🔐 Starting auth initialization...');
         
-        // Add a timeout to prevent infinite loading
         const timeoutId = setTimeout(() => {
           if (isMounted.current && isAuthLoading) {
             console.warn('⚠️ Auth check timeout - forcing completion');
@@ -52,7 +52,6 @@ const App: React.FC = () => {
           }
         }, 5000);
 
-        // Check for current session
         const user = await authService.getCurrentUser();
         
         clearTimeout(timeoutId);
@@ -76,27 +75,25 @@ const App: React.FC = () => {
       }
     };
 
-    // Run auth check
     initAuth();
 
-    // Setup auth state listener
     authSubscriptionRef.current = authService.onAuthStateChange((user) => {
       if (!isMounted.current) return;
       
       console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
       setCurrentUser(user);
       
-      // Clear trip data when user logs out
       if (!user) {
+        // Clean up everything on logout
         setCurrentTrip(null);
         setAvailableTrip(null);
         setIsCallModalOpen(false);
+        setHasIncomingCall(false);
         setLocalStream(null);
         setRemoteStream(null);
         
-        // End any active calls
         if (rtcServiceRef.current) {
-          rtcServiceRef.current.endCall(false);
+          rtcServiceRef.current.destroy();
           rtcServiceRef.current = null;
         }
       }
@@ -109,6 +106,52 @@ const App: React.FC = () => {
       }
     };
   }, []);
+
+  // --- Setup WebRTC Listener when trip becomes active ---
+  useEffect(() => {
+    if (!currentUser || !currentTrip) return;
+    
+    // Only setup listener for accepted trips or later
+    if (currentTrip.status === TripStatus.SEARCHING) return;
+
+    const targetUserId = currentUser.role === UserRole.RIDER 
+      ? currentTrip.driverId 
+      : currentTrip.riderId;
+
+    if (!targetUserId) {
+      console.warn('[App] Cannot setup call listener: missing target user');
+      return;
+    }
+
+    console.log('[App] 🎧 Setting up call listener for trip:', currentTrip.id);
+
+    // Create WebRTC service and start listening
+    const rtc = new WebRTCService(
+      currentTrip.id,
+      currentUser.id,
+      targetUserId
+    );
+
+    rtc.onIncomingCall(() => {
+      console.log('[App] 🔔 INCOMING CALL!');
+      if (isMounted.current) {
+        setHasIncomingCall(true);
+      }
+    });
+
+    rtc.startListening().catch(error => {
+      console.error('[App] ❌ Failed to start call listener:', error);
+    });
+
+    rtcServiceRef.current = rtc;
+
+    return () => {
+      console.log('[App] 🧹 Cleaning up call listener');
+      if (rtc) {
+        rtc.destroy();
+      }
+    };
+  }, [currentUser?.id, currentTrip?.id, currentTrip?.status]);
 
   // --- Driver Online Status & Trip Subscription ---
   useEffect(() => {
@@ -147,34 +190,31 @@ const App: React.FC = () => {
     try {
       console.log('👋 Logging out...');
       
-      // Clear local state first
+      // Clean up WebRTC
+      if (rtcServiceRef.current) {
+        rtcServiceRef.current.destroy();
+        rtcServiceRef.current = null;
+      }
+      
+      // Clear state
       setCurrentUser(null);
       setCurrentTrip(null);
       setAvailableTrip(null);
       setIsCallModalOpen(false);
+      setHasIncomingCall(false);
       setLocalStream(null);
       setRemoteStream(null);
       
-      // End any active calls
-      if (rtcServiceRef.current) {
-        rtcServiceRef.current.endCall(false);
-        rtcServiceRef.current = null;
-      }
-      
-      // Sign out from auth service (this will clear storage)
+      // Sign out
       await authService.signOut();
       
       console.log('✅ Logout complete');
     } catch (error) {
       console.error('Error logging out:', error);
-      // Even on error, ensure local state is cleared
-      setCurrentUser(null);
-      setCurrentTrip(null);
-      setAvailableTrip(null);
     }
   };
 
-  // --- Trip Handlers (Rider) ---
+  // --- Trip Handlers ---
   const requestTrip = async () => {
     if (!currentUser) return;
     setIsRequesting(true);
@@ -198,7 +238,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Trip Handlers (Driver) ---
   const acceptTrip = async () => {
     if (!availableTrip || !currentUser) return;
 
@@ -219,11 +258,15 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Shared Trip Status Updates ---
   const updateTripStatus = async (status: TripStatus) => {
     if (!currentTrip) return;
 
     if (status === TripStatus.IDLE) {
+      // Clean up call listener when trip ends
+      if (rtcServiceRef.current) {
+        rtcServiceRef.current.destroy();
+        rtcServiceRef.current = null;
+      }
       setCurrentTrip(null);
       return;
     }
@@ -236,66 +279,45 @@ const App: React.FC = () => {
     }
   };
 
-  // --- WebRTC Handlers ---
-  const startCall = async () => {
-    if (!currentTrip || !currentUser) return;
-
-    // Determine who we're calling
-    const isRider = currentUser.role === UserRole.RIDER;
-    const targetUserId = isRider ? currentTrip.driverId : currentTrip.riderId;
-
-    if (!targetUserId) {
-      console.error('Cannot start call: missing target user ID');
-      alert('Cannot start call: Other user not connected to trip');
+  // --- Call Handlers ---
+  const initiateCall = async () => {
+    if (!rtcServiceRef.current) {
+      console.error('[App] Cannot initiate call: WebRTC service not initialized');
+      alert('Call service not ready. Please wait a moment.');
       return;
     }
 
-    console.log('📞 Starting call...', {
-      from: currentUser.id.substring(0, 8),
-      to: targetUserId.substring(0, 8),
-      tripId: currentTrip.id
-    });
-
+    console.log('[App] 📞 Initiating call...');
     setIsCallModalOpen(true);
     setIsCalling(true);
 
-    // Create WebRTC service with proper user IDs
-    const rtc = new WebRTCService(
-      currentTrip.id,
-      currentUser.id,
-      targetUserId
-    );
-    rtcServiceRef.current = rtc;
-
-    rtc.onRemoteStream((stream) => {
-      console.log('✅ Remote stream received');
+    rtcServiceRef.current.onRemoteStream((stream) => {
+      console.log('[App] ✅ Remote stream received');
       if (isMounted.current) {
         setRemoteStream(stream);
         setIsCalling(false);
       }
     });
 
-    rtc.onCallEnd(() => {
-      console.log('📞 Call ended');
+    rtcServiceRef.current.onCallEnd(() => {
+      console.log('[App] 📞 Call ended');
       if (isMounted.current) {
         setIsCallModalOpen(false);
         setLocalStream(null);
         setRemoteStream(null);
         setIsCalling(false);
+        setHasIncomingCall(false);
       }
     });
 
     try {
-      // The caller initiates (first to call), receiver joins
-      const isInitiator = isRider; // Rider typically calls first
-      const stream = await rtc.startCall(isInitiator);
-      
+      const stream = await rtcServiceRef.current.initiateCall();
       if (isMounted.current) {
         setLocalStream(stream);
-        console.log('✅ Local stream started');
+        console.log('[App] ✅ Local stream started');
       }
     } catch (err: any) {
-      console.error("Failed to start call:", err);
+      console.error("[App] Failed to initiate call:", err);
       if (isMounted.current) {
         setIsCallModalOpen(false);
         setIsCalling(false);
@@ -304,12 +326,62 @@ const App: React.FC = () => {
     }
   };
 
+  const answerCall = async () => {
+    if (!rtcServiceRef.current) {
+      console.error('[App] Cannot answer call: WebRTC service not initialized');
+      return;
+    }
+
+    console.log('[App] 📞 Answering call...');
+    setHasIncomingCall(false);
+    setIsCallModalOpen(true);
+    setIsCalling(true);
+
+    rtcServiceRef.current.onRemoteStream((stream) => {
+      console.log('[App] ✅ Remote stream received');
+      if (isMounted.current) {
+        setRemoteStream(stream);
+        setIsCalling(false);
+      }
+    });
+
+    rtcServiceRef.current.onCallEnd(() => {
+      console.log('[App] 📞 Call ended');
+      if (isMounted.current) {
+        setIsCallModalOpen(false);
+        setLocalStream(null);
+        setRemoteStream(null);
+        setIsCalling(false);
+        setHasIncomingCall(false);
+      }
+    });
+
+    try {
+      const stream = await rtcServiceRef.current.answerCall();
+      if (isMounted.current) {
+        setLocalStream(stream);
+        console.log('[App] ✅ Local stream started');
+      }
+    } catch (err: any) {
+      console.error("[App] Failed to answer call:", err);
+      if (isMounted.current) {
+        setIsCallModalOpen(false);
+        setIsCalling(false);
+        setHasIncomingCall(false);
+        alert(err.message || 'Failed to answer call.');
+      }
+    }
+  };
+
   const endCall = () => {
-    rtcServiceRef.current?.endCall();
+    if (rtcServiceRef.current) {
+      rtcServiceRef.current.endCall();
+    }
     setIsCallModalOpen(false);
     setLocalStream(null);
     setRemoteStream(null);
     setIsCalling(false);
+    setHasIncomingCall(false);
   };
 
   // --- Loading State ---
@@ -319,7 +391,6 @@ const App: React.FC = () => {
         <div className="text-center space-y-4">
           <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
           <p className="text-white text-xl font-medium">Loading Adaidaita...</p>
-          <p className="text-zinc-500 text-sm">This shouldn't take long...</p>
         </div>
       </div>
     );
@@ -334,11 +405,7 @@ const App: React.FC = () => {
           <h2 className="text-white text-2xl font-bold">Something Went Wrong</h2>
           <p className="text-zinc-400">{authError}</p>
           <button
-            onClick={() => {
-              setAuthError(null);
-              setIsAuthLoading(true);
-              window.location.reload();
-            }}
+            onClick={() => window.location.reload()}
             className="mt-4 px-6 py-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-colors"
           >
             Try Again
@@ -350,30 +417,62 @@ const App: React.FC = () => {
 
   // --- Render Unauthenticated ---
   if (!currentUser) {
-    return <AuthModal onSuccess={() => {
-      console.log('✅ Login successful');
-    }} />;
+    return <AuthModal onSuccess={() => {}} />;
   }
 
   // --- Render Authenticated App ---
   return (
     <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans">
       
-      {/* 1. Header Layer */}
       <Header user={currentUser} onLogout={logout} />
 
-      {/* 2. Map Background Layer */}
       <div className="absolute inset-0 z-0">
         <MapVisualizer 
           role={currentUser.role} 
           driverLocation={currentTrip?.driverLocation}
-          pickup={currentTrip?.pickup || (pickupInput && isRequesting ? pickupInput : pickupInput)}
+          pickup={currentTrip?.pickup || pickupInput}
           isSearching={currentTrip?.status === TripStatus.SEARCHING}
           onLocationSelect={setPickupInput}
         />
       </div>
 
-      {/* 3. Driver Incoming Request Notification */}
+      {/* Incoming Call Notification */}
+      {hasIncomingCall && !isCallModalOpen && (
+        <div className="absolute top-24 left-4 right-4 z-50 md:left-auto md:right-8 md:w-96">
+          <div className="bg-emerald-600 text-white rounded-2xl shadow-2xl p-6 animate-in slide-in-from-top duration-500">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center animate-pulse">
+                  <Phone size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg">Incoming Call</h3>
+                  <p className="text-emerald-100 text-sm">
+                    {currentUser.role === UserRole.RIDER ? 'Driver' : 'Rider'} is calling...
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setHasIncomingCall(false)}
+                className="flex-1 px-4 py-3 bg-white/20 text-white font-semibold rounded-xl hover:bg-white/30 transition-colors"
+              >
+                Decline
+              </button>
+              <button 
+                onClick={answerCall}
+                className="flex-1 px-4 py-3 bg-white text-emerald-600 font-semibold rounded-xl hover:bg-emerald-50 transition-colors shadow-lg"
+              >
+                Answer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Driver Incoming Trip Request */}
       {currentUser.role === UserRole.DRIVER && availableTrip && !currentTrip && (
         <div className="absolute top-24 left-4 right-4 z-40 md:left-auto md:right-8 md:w-96">
           <div className="bg-white rounded-2xl shadow-2xl border-2 border-emerald-500 p-6 animate-in slide-in-from-top duration-500">
@@ -384,7 +483,7 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-bold text-zinc-900">New Trip Request!</h3>
-                  <p className="text-sm text-zinc-500">{availableTrip.fare} NGN • 2.5 km</p>
+                  <p className="text-sm text-zinc-500">{availableTrip.fare} NGN</p>
                 </div>
               </div>
               <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded-full animate-pulse">
@@ -412,19 +511,18 @@ const App: React.FC = () => {
               </button>
               <button 
                 onClick={acceptTrip}
-                className="flex-1 px-4 py-3 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200"
+                className="flex-1 px-4 py-3 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-lg"
               >
-                Accept Ride
+                Accept
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 4. Bottom Sheet / Control Layer */}
+      {/* Bottom Controls */}
       <div className="absolute bottom-0 left-0 right-0 z-30 p-4 md:max-w-md md:mx-auto md:bottom-8">
         
-        {/* Scenario A: Rider - No Trip */}
         {currentUser.role === UserRole.RIDER && !currentTrip && (
           <RideRequestPanel 
             pickup={pickupInput}
@@ -436,29 +534,27 @@ const App: React.FC = () => {
           />
         )}
 
-        {/* Scenario B: Active Trip (Rider or Driver) */}
         {currentTrip && (
           <TripStatusPanel 
             trip={currentTrip}
             userRole={currentUser.role}
             onStatusUpdate={updateTripStatus}
-            onCall={startCall}
+            onCall={initiateCall}
           />
         )}
 
-        {/* Scenario C: Driver - Idle (Online) */}
         {currentUser.role === UserRole.DRIVER && !currentTrip && !availableTrip && (
            <div className="bg-white rounded-2xl shadow-xl p-6 text-center border border-zinc-100">
               <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
                 <Car size={32} className="text-emerald-600" />
               </div>
               <h3 className="text-xl font-bold text-zinc-900">You are Online</h3>
-              <p className="text-zinc-500 mt-1">Waiting for nearby ride requests...</p>
+              <p className="text-zinc-500 mt-1">Waiting for ride requests...</p>
            </div>
         )}
       </div>
 
-      {/* 5. Full Screen Modal Layer */}
+      {/* Call Modal */}
       {isCallModalOpen && (
         <CallModal 
           localStream={localStream}
