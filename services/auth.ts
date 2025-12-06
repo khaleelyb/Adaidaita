@@ -7,12 +7,11 @@ const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
-    storage: window.localStorage, // Explicitly use localStorage
-    storageKey: 'adaidaita-auth-token', // Custom key to avoid conflicts
+    storage: window.localStorage,
+    storageKey: 'adaidaita-auth-token',
   }
 });
 
-// Enhanced logging helper
 const log = {
   info: (msg: string, data?: any) => console.log(`[Auth] ℹ️ ${msg}`, data || ''),
   error: (msg: string, error?: any) => console.error(`[Auth] ❌ ${msg}`, error || ''),
@@ -21,7 +20,8 @@ const log = {
 };
 
 export class AuthService {
-  // Sign up new user
+  private authStateChangeListeners: ((user: User | null) => void)[] = [];
+
   async signUp(email: string, password: string, name: string, role: UserRole) {
     try {
       log.info('Starting sign up...', { email, role });
@@ -49,7 +49,6 @@ export class AuthService {
 
       log.success('User created', { id: authData.user.id });
 
-      // Create profile
       try {
         const { error: profileError } = await supabase
           .from('users')
@@ -75,7 +74,6 @@ export class AuthService {
     }
   }
 
-  // Sign in existing user
   async signIn(email: string, password: string) {
     try {
       log.info('Signing in...', { email });
@@ -122,7 +120,6 @@ export class AuthService {
     }
   }
 
-  // Sign out
   async signOut() {
     try {
       log.info('Signing out...');
@@ -134,18 +131,44 @@ export class AuthService {
           .eq('id', user.id);
       }
 
+      // Clear local state first
+      this.notifyAuthChange(null);
+
+      // Sign out from Supabase
       const { error } = await supabase.auth.signOut();
+      
       if (error) {
         log.error('Sign out failed', error);
-      } else {
-        log.success('Signed out');
+        throw error;
       }
+
+      // Force clear all auth-related storage
+      this.clearAuthStorage();
+      
+      log.success('Signed out successfully');
     } catch (error: any) {
       log.error('Sign out error', error);
+      // Even if there's an error, clear local storage
+      this.clearAuthStorage();
+      throw error;
     }
   }
 
-  // Get current session
+  private clearAuthStorage() {
+    try {
+      // Clear Supabase auth tokens
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.includes('supabase') || key.includes('auth') || key.includes('adaidaita')) {
+          localStorage.removeItem(key);
+        }
+      });
+      log.info('Auth storage cleared');
+    } catch (error) {
+      log.error('Error clearing auth storage', error);
+    }
+  }
+
   async getSession() {
     try {
       const { data: { session }, error } = await supabase.auth.getSession();
@@ -168,7 +191,6 @@ export class AuthService {
     }
   }
 
-  // Get user profile from database
   private async getUserProfile(userId: string): Promise<any | null> {
     try {
       const { data, error } = await supabase
@@ -193,7 +215,6 @@ export class AuthService {
     }
   }
 
-  // Get current user with profile
   async getCurrentUser(): Promise<User | null> {
     try {
       log.info('Getting current user...');
@@ -205,16 +226,13 @@ export class AuthService {
         return null;
       }
 
-      // Fetch profile from DB
       let profile = await this.getUserProfile(session.user.id);
 
-      // If no profile, try to create one
       if (!profile) {
         log.warn('Profile missing, attempting creation...');
         profile = await this.createUserProfile(session.user);
         
         if (!profile) {
-          // Fallback to session metadata
           log.warn('Using session metadata as fallback');
           const metadata = session.user.user_metadata || {};
           
@@ -255,7 +273,6 @@ export class AuthService {
     }
   }
 
-  // Create user profile
   private async createUserProfile(authUser: any): Promise<any | null> {
     try {
       log.info('Creating profile for user', authUser.id);
@@ -291,23 +308,42 @@ export class AuthService {
     }
   }
 
-  // Listen to auth state changes
-  onAuthStateChange(callback: (user: User | null) => void) {
-    log.info('Setting up auth listener...');
-    
-    return supabase.auth.onAuthStateChange(async (event, session) => {
-      log.info('Auth event:', event);
-      
-      if (session?.user) {
-        const user = await this.getCurrentUser();
+  private notifyAuthChange(user: User | null) {
+    this.authStateChangeListeners.forEach(callback => {
+      try {
         callback(user);
-      } else {
-        callback(null);
+      } catch (error) {
+        log.error('Error in auth state listener', error);
       }
     });
   }
 
-  // Test connection
+  onAuthStateChange(callback: (user: User | null) => void) {
+    log.info('Setting up auth listener...');
+    
+    // Add to listeners
+    this.authStateChangeListeners.push(callback);
+    
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      log.info('Auth event:', event);
+      
+      if (event === 'SIGNED_OUT') {
+        log.info('User signed out');
+        this.notifyAuthChange(null);
+        return;
+      }
+      
+      if (session?.user) {
+        const user = await this.getCurrentUser();
+        this.notifyAuthChange(user);
+      } else {
+        this.notifyAuthChange(null);
+      }
+    });
+
+    return authListener;
+  }
+
   async testConnection(): Promise<boolean> {
     try {
       const { error } = await supabase.from('users').select('count').limit(1);
