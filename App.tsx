@@ -10,7 +10,6 @@ import { RideRequestPanel } from './components/RideRequestPanel';
 import { TripStatusPanel } from './components/TripStatusPanel';
 import { AuthModal } from './components/AuthModal';
 import { Car, MapPin, Navigation, Phone } from 'lucide-react';
-import { Button } from './components/Button';
 
 const App: React.FC = () => {
   // Global State
@@ -24,6 +23,7 @@ const App: React.FC = () => {
   const [pickupInput, setPickupInput] = useState('Central Market');
   const [destinationInput, setDestinationInput] = useState('');
   const [isRequesting, setIsRequesting] = useState(false);
+  const [requestError, setRequestError] = useState<string | undefined>(undefined);
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
   const [hasIncomingCall, setHasIncomingCall] = useState(false);
@@ -43,11 +43,11 @@ const App: React.FC = () => {
     
     const initAuth = async () => {
       try {
-        console.log('🔐 Starting auth initialization...');
+        console.log('馃攼 Starting auth initialization...');
         
         const timeoutId = setTimeout(() => {
           if (isMounted.current && isAuthLoading) {
-            console.warn('⚠️ Auth check timeout - forcing completion');
+            console.warn('鈿狅笍 Auth check timeout - forcing completion');
             setIsAuthLoading(false);
           }
         }, 5000);
@@ -59,15 +59,15 @@ const App: React.FC = () => {
         if (!isMounted.current) return;
 
         if (user) {
-          console.log('✅ User session restored:', user.email);
+          console.log('鉁� User session restored:', user.email);
           setCurrentUser(user);
         } else {
-          console.log('ℹ️ No active session - showing login');
+          console.log('鈩癸笍 No active session - showing login');
         }
         setIsAuthLoading(false);
 
       } catch (error) {
-        console.error('❌ Auth initialization error:', error);
+        console.error('鉂� Auth initialization error:', error);
         if (isMounted.current) {
           setIsAuthLoading(false);
           setAuthError('Failed to load. Please try again.');
@@ -80,7 +80,7 @@ const App: React.FC = () => {
     authSubscriptionRef.current = authService.onAuthStateChange((user) => {
       if (!isMounted.current) return;
       
-      console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
+      console.log('馃攧 Auth state changed:', user ? user.email : 'Logged out');
       setCurrentUser(user);
       
       if (!user) {
@@ -123,7 +123,7 @@ const App: React.FC = () => {
       return;
     }
 
-    console.log('[App] 🎧 Setting up call listener for trip:', currentTrip.id);
+    console.log('[App] 馃帶 Setting up call listener for trip:', currentTrip.id);
 
     // Create WebRTC service and start listening
     const rtc = new WebRTCService(
@@ -133,20 +133,20 @@ const App: React.FC = () => {
     );
 
     rtc.onIncomingCall(() => {
-      console.log('[App] 🔔 INCOMING CALL!');
+      console.log('[App] 馃敂 INCOMING CALL!');
       if (isMounted.current) {
         setHasIncomingCall(true);
       }
     });
 
     rtc.startListening().catch(error => {
-      console.error('[App] ❌ Failed to start call listener:', error);
+      console.error('[App] 鉂� Failed to start call listener:', error);
     });
 
     rtcServiceRef.current = rtc;
 
     return () => {
-      console.log('[App] 🧹 Cleaning up call listener');
+      console.log('[App] 馃Ч Cleaning up call listener');
       if (rtc) {
         rtc.destroy();
       }
@@ -157,7 +157,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.DRIVER) return;
 
-    console.log('🚗 Setting up driver mode...');
+    console.log('馃殫 Setting up driver mode...');
     
     let subscription: { unsubscribe: () => void } | null = null;
 
@@ -166,7 +166,7 @@ const App: React.FC = () => {
         await supabase.setDriverOnline(currentUser.id, true);
 
         subscription = supabase.subscribeToAvailableTrips((trip) => {
-          console.log('📢 New trip available:', trip);
+          console.log('馃摙 New trip available:', trip);
           if (!currentTrip) {
             setAvailableTrip(trip);
           }
@@ -188,7 +188,7 @@ const App: React.FC = () => {
 
   const logout = async () => {
     try {
-      console.log('👋 Logging out...');
+      console.log('馃憢 Logging out...');
       
       // Clean up WebRTC
       if (rtcServiceRef.current) {
@@ -208,7 +208,7 @@ const App: React.FC = () => {
       // Sign out
       await authService.signOut();
       
-      console.log('✅ Logout complete');
+      console.log('鉁� Logout complete');
     } catch (error) {
       console.error('Error logging out:', error);
     }
@@ -218,6 +218,7 @@ const App: React.FC = () => {
   const requestTrip = async () => {
     if (!currentUser) return;
     setIsRequesting(true);
+    setRequestError(undefined);
     
     try {
       const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
@@ -231,8 +232,9 @@ const App: React.FC = () => {
         }
       });
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error requesting trip:', error);
+      setRequestError(error.message || 'Failed to request trip. Please try again.');
     } finally {
       setIsRequesting(false);
     }
@@ -252,9 +254,14 @@ const App: React.FC = () => {
             setCurrentTrip(data.payload.trip);
           }
         });
+      } else {
+        // If accept returns null, it likely failed or trip was taken
+        setAvailableTrip(null);
+        alert('This trip is no longer available.');
       }
     } catch (error) {
       console.error('Error accepting trip:', error);
+      alert('Failed to accept trip. Please try again.');
     }
   };
 
@@ -287,12 +294,12 @@ const App: React.FC = () => {
       return;
     }
 
-    console.log('[App] 📞 Initiating call...');
+    console.log('[App] 馃摓 Initiating call...');
     setIsCallModalOpen(true);
     setIsCalling(true);
 
     rtcServiceRef.current.onRemoteStream((stream) => {
-      console.log('[App] ✅ Remote stream received');
+      console.log('[App] 鉁� Remote stream received');
       if (isMounted.current) {
         setRemoteStream(stream);
         setIsCalling(false);
@@ -300,7 +307,7 @@ const App: React.FC = () => {
     });
 
     rtcServiceRef.current.onCallEnd(() => {
-      console.log('[App] 📞 Call ended');
+      console.log('[App] 馃摓 Call ended');
       if (isMounted.current) {
         setIsCallModalOpen(false);
         setLocalStream(null);
@@ -314,7 +321,7 @@ const App: React.FC = () => {
       const stream = await rtcServiceRef.current.initiateCall();
       if (isMounted.current) {
         setLocalStream(stream);
-        console.log('[App] ✅ Local stream started');
+        console.log('[App] 鉁� Local stream started');
       }
     } catch (err: any) {
       console.error("[App] Failed to initiate call:", err);
@@ -332,13 +339,13 @@ const App: React.FC = () => {
       return;
     }
 
-    console.log('[App] 📞 Answering call...');
+    console.log('[App] 馃摓 Answering call...');
     setHasIncomingCall(false);
     setIsCallModalOpen(true);
     setIsCalling(true);
 
     rtcServiceRef.current.onRemoteStream((stream) => {
-      console.log('[App] ✅ Remote stream received');
+      console.log('[App] 鉁� Remote stream received');
       if (isMounted.current) {
         setRemoteStream(stream);
         setIsCalling(false);
@@ -346,7 +353,7 @@ const App: React.FC = () => {
     });
 
     rtcServiceRef.current.onCallEnd(() => {
-      console.log('[App] 📞 Call ended');
+      console.log('[App] 馃摓 Call ended');
       if (isMounted.current) {
         setIsCallModalOpen(false);
         setLocalStream(null);
@@ -360,7 +367,7 @@ const App: React.FC = () => {
       const stream = await rtcServiceRef.current.answerCall();
       if (isMounted.current) {
         setLocalStream(stream);
-        console.log('[App] ✅ Local stream started');
+        console.log('[App] 鉁� Local stream started');
       }
     } catch (err: any) {
       console.error("[App] Failed to answer call:", err);
@@ -401,7 +408,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-zinc-900 flex items-center justify-center p-6">
         <div className="text-center space-y-4 max-w-md">
-          <div className="text-red-500 text-6xl mb-4">⚠️</div>
+          <div className="text-red-500 text-6xl mb-4">鈿狅笍</div>
           <h2 className="text-white text-2xl font-bold">Something Went Wrong</h2>
           <p className="text-zinc-400">{authError}</p>
           <button
@@ -531,6 +538,7 @@ const App: React.FC = () => {
             setDestination={setDestinationInput}
             onRequest={requestTrip}
             isLoading={isRequesting}
+            error={requestError}
           />
         )}
 
