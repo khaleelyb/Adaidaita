@@ -17,6 +17,10 @@ export class WebRTCService {
   private isChannelReady: boolean = false;
   private hasRemoteDescription: boolean = false;
   private isListening: boolean = false;
+  
+  // New properties for handling incoming call state
+  private pendingOffer: any = null;
+  private preAnswerCandidates: any[] = [];
 
   constructor(tripId: string, currentUserId: string, targetUserId: string) {
     this.tripId = tripId;
@@ -52,6 +56,8 @@ export class WebRTCService {
   stopListening() {
     console.log('[WebRTC] 🔇 Stopping call listener...');
     this.isListening = false;
+    this.pendingOffer = null;
+    this.preAnswerCandidates = [];
     
     if (this.channel) {
       supabaseClient.removeChannel(this.channel);
@@ -197,6 +203,22 @@ export class WebRTCService {
       await this.createAndSendOffer();
     } else {
       console.log('[WebRTC] 📱 Receiver ready, waiting for offer...');
+      
+      // If we have a pending offer (received while phone was ringing), process it now
+      if (this.pendingOffer) {
+        console.log('[WebRTC] 📨 Processing pending offer...');
+        await this.handleOffer(this.pendingOffer);
+        this.pendingOffer = null;
+
+        // Also process any pre-answer candidates
+        if (this.preAnswerCandidates.length > 0) {
+          console.log(`[WebRTC] 📦 Processing ${this.preAnswerCandidates.length} pre-answer candidates`);
+          for (const candidateData of this.preAnswerCandidates) {
+            await this.handleCandidate(candidateData);
+          }
+          this.preAnswerCandidates = [];
+        }
+      }
     }
 
     return this.localStream;
@@ -304,14 +326,24 @@ export class WebRTCService {
 
     console.log(`[WebRTC] 📨 Received signal: ${signal.type} from ${signal.from.substring(0, 8)}`);
 
-    // If we receive an offer and we're just listening (not in a call yet)
+    // CASE 1: Incoming Offer while listening (Ringing state)
+    // We store the offer and trigger the UI callback
     if (signal.type === 'offer' && !this.peerConnection && this.isListening) {
-      console.log('[WebRTC] 🔔 Incoming call detected!');
+      console.log('[WebRTC] 🔔 Incoming call detected! Storing offer.');
+      this.pendingOffer = signal.data;
       
       // Trigger incoming call callback
       if (this.onIncomingCallCallback) {
         this.onIncomingCallCallback();
       }
+      return;
+    }
+
+    // CASE 2: Early Candidates (while ringing)
+    // Store these to replay after we answer
+    if (signal.type === 'candidate' && !this.peerConnection && this.isListening && this.pendingOffer) {
+      console.log('[WebRTC] 📦 Storing pre-answer candidate');
+      this.preAnswerCandidates.push(signal.data);
       return;
     }
 
@@ -466,6 +498,8 @@ export class WebRTCService {
 
     this.remoteStream = null;
     this.candidateQueue = [];
+    this.preAnswerCandidates = [];
+    this.pendingOffer = null;
     this.hasRemoteDescription = false;
 
     console.log('[WebRTC] ✅ Call cleanup complete');
@@ -489,4 +523,4 @@ export class WebRTCService {
     this.endCall(false);
     this.stopListening();
   }
-            }
+}
