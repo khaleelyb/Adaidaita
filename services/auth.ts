@@ -2,13 +2,16 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG } from '../constants';
 import { User, UserRole } from '../types';
 
+// Use a unique storage key that won't conflict with window.storage
+const SUPABASE_AUTH_STORAGE_KEY = 'sb-adaidaita-auth';
+
 const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
     storage: window.localStorage,
-    storageKey: 'adaidaita-auth-token',
+    storageKey: SUPABASE_AUTH_STORAGE_KEY, // Unique key to avoid conflicts
   }
 });
 
@@ -142,28 +145,43 @@ export class AuthService {
         throw error;
       }
 
-      // Force clear all auth-related storage
-      this.clearAuthStorage();
+      // Clear ONLY Supabase auth storage (not window.storage data)
+      this.clearSupabaseAuthStorage();
       
       log.success('Signed out successfully');
     } catch (error: any) {
       log.error('Sign out error', error);
       // Even if there's an error, clear local storage
-      this.clearAuthStorage();
+      this.clearSupabaseAuthStorage();
       throw error;
     }
   }
 
-  private clearAuthStorage() {
+  /**
+   * Safely clears ONLY Supabase auth-related storage
+   * Does NOT touch window.storage keys or other localStorage data
+   */
+  private clearSupabaseAuthStorage() {
     try {
-      // Clear Supabase auth tokens
+      // Clear the specific Supabase auth key we configured
+      localStorage.removeItem(SUPABASE_AUTH_STORAGE_KEY);
+      
+      // Also clear any legacy Supabase keys that might exist
+      // (in case user has old sessions from default key)
       const keys = Object.keys(localStorage);
       keys.forEach(key => {
-        if (key.includes('supabase') || key.includes('auth') || key.includes('adaidaita')) {
+        // Only remove keys that match Supabase auth patterns
+        // IMPORTANT: Don't touch any other keys
+        if (
+          key.startsWith('sb-') && 
+          (key.includes('-auth-token') || key.includes('supabase.auth.token'))
+        ) {
           localStorage.removeItem(key);
+          log.info('Cleared legacy Supabase key:', key);
         }
       });
-      log.info('Auth storage cleared');
+      
+      log.info('Supabase auth storage cleared');
     } catch (error) {
       log.error('Error clearing auth storage', error);
     }
