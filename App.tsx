@@ -9,6 +9,9 @@ import { Header } from './components/Header';
 import { RideRequestPanel } from './components/RideRequestPanel';
 import { TripStatusPanel } from './components/TripStatusPanel';
 import { AuthModal } from './components/AuthModal';
+import { BottomNav } from './components/BottomNav';
+import { Account } from './pages/Account';
+import { Services } from './pages/Services';
 import { Car, MapPin, Navigation, Phone } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -19,6 +22,9 @@ const App: React.FC = () => {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   
+  // Navigation State
+  const [currentTab, setCurrentTab] = useState('home');
+
   // UI State
   const [pickupInput, setPickupInput] = useState('Central Market');
   const [destinationInput, setDestinationInput] = useState('');
@@ -43,11 +49,11 @@ const App: React.FC = () => {
     
     const initAuth = async () => {
       try {
-        console.log('馃攼 Starting auth initialization...');
+        console.log('🔍 Starting auth initialization...');
         
         const timeoutId = setTimeout(() => {
           if (isMounted.current && isAuthLoading) {
-            console.warn('鈿狅笍 Auth check timeout - forcing completion');
+            console.warn('⚠️ Auth check timeout - forcing completion');
             setIsAuthLoading(false);
           }
         }, 5000);
@@ -59,15 +65,15 @@ const App: React.FC = () => {
         if (!isMounted.current) return;
 
         if (user) {
-          console.log('鉁� User session restored:', user.email);
+          console.log('✅ User session restored:', user.email);
           setCurrentUser(user);
         } else {
-          console.log('鈩癸笍 No active session - showing login');
+          console.log('ℹ️ No active session - showing login');
         }
         setIsAuthLoading(false);
 
       } catch (error) {
-        console.error('鉂� Auth initialization error:', error);
+        console.error('❌ Auth initialization error:', error);
         if (isMounted.current) {
           setIsAuthLoading(false);
           setAuthError('Failed to load. Please try again.');
@@ -80,7 +86,7 @@ const App: React.FC = () => {
     authSubscriptionRef.current = authService.onAuthStateChange((user) => {
       if (!isMounted.current) return;
       
-      console.log('馃攧 Auth state changed:', user ? user.email : 'Logged out');
+      console.log('👤 Auth state changed:', user ? user.email : 'Logged out');
       setCurrentUser(user);
       
       if (!user) {
@@ -91,6 +97,7 @@ const App: React.FC = () => {
         setHasIncomingCall(false);
         setLocalStream(null);
         setRemoteStream(null);
+        setCurrentTab('home');
         
         if (rtcServiceRef.current) {
           rtcServiceRef.current.destroy();
@@ -123,7 +130,7 @@ const App: React.FC = () => {
       return;
     }
 
-    console.log('[App] 馃帶 Setting up call listener for trip:', currentTrip.id);
+    console.log('[App] 🎧 Setting up call listener for trip:', currentTrip.id);
 
     // Create WebRTC service and start listening
     const rtc = new WebRTCService(
@@ -133,20 +140,20 @@ const App: React.FC = () => {
     );
 
     rtc.onIncomingCall(() => {
-      console.log('[App] 馃敂 INCOMING CALL!');
+      console.log('[App] 🔔 INCOMING CALL!');
       if (isMounted.current) {
         setHasIncomingCall(true);
       }
     });
 
     rtc.startListening().catch(error => {
-      console.error('[App] 鉂� Failed to start call listener:', error);
+      console.error('[App] ❌ Failed to start call listener:', error);
     });
 
     rtcServiceRef.current = rtc;
 
     return () => {
-      console.log('[App] 馃Ч Cleaning up call listener');
+      console.log('[App] 🧹 Cleaning up call listener');
       if (rtc) {
         rtc.destroy();
       }
@@ -157,7 +164,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.DRIVER) return;
 
-    console.log('馃殫 Setting up driver mode...');
+    console.log('🚕 Setting up driver mode...');
     
     let subscription: { unsubscribe: () => void } | null = null;
 
@@ -166,7 +173,7 @@ const App: React.FC = () => {
         await supabase.setDriverOnline(currentUser.id, true);
 
         subscription = supabase.subscribeToAvailableTrips((trip) => {
-          console.log('馃摙 New trip available:', trip);
+          console.log('📡 New trip available:', trip);
           if (!currentTrip) {
             setAvailableTrip(trip);
           }
@@ -188,7 +195,7 @@ const App: React.FC = () => {
 
   const logout = async () => {
     try {
-      console.log('馃憢 Logging out...');
+      console.log('👋 Logging out...');
       
       // Clean up WebRTC
       if (rtcServiceRef.current) {
@@ -204,11 +211,12 @@ const App: React.FC = () => {
       setHasIncomingCall(false);
       setLocalStream(null);
       setRemoteStream(null);
+      setCurrentTab('home');
       
       // Sign out
       await authService.signOut();
       
-      console.log('鉁� Logout complete');
+      console.log('✅ Logout complete');
     } catch (error) {
       console.error('Error logging out:', error);
     }
@@ -294,12 +302,12 @@ const App: React.FC = () => {
       return;
     }
 
-    console.log('[App] 馃摓 Initiating call...');
+    console.log('[App] 📞 Initiating call...');
     setIsCallModalOpen(true);
     setIsCalling(true);
 
     rtcServiceRef.current.onRemoteStream((stream) => {
-      console.log('[App] 鉁� Remote stream received');
+      console.log('[App] ✅ Remote stream received');
       if (isMounted.current) {
         setRemoteStream(stream);
         setIsCalling(false);
@@ -307,7 +315,7 @@ const App: React.FC = () => {
     });
 
     rtcServiceRef.current.onCallEnd(() => {
-      console.log('[App] 馃摓 Call ended');
+      console.log('[App] 📞 Call ended');
       if (isMounted.current) {
         setIsCallModalOpen(false);
         setLocalStream(null);
@@ -321,7 +329,7 @@ const App: React.FC = () => {
       const stream = await rtcServiceRef.current.initiateCall();
       if (isMounted.current) {
         setLocalStream(stream);
-        console.log('[App] 鉁� Local stream started');
+        console.log('[App] ✅ Local stream started');
       }
     } catch (err: any) {
       console.error("[App] Failed to initiate call:", err);
@@ -339,13 +347,13 @@ const App: React.FC = () => {
       return;
     }
 
-    console.log('[App] 馃摓 Answering call...');
+    console.log('[App] 📞 Answering call...');
     setHasIncomingCall(false);
     setIsCallModalOpen(true);
     setIsCalling(true);
 
     rtcServiceRef.current.onRemoteStream((stream) => {
-      console.log('[App] 鉁� Remote stream received');
+      console.log('[App] ✅ Remote stream received');
       if (isMounted.current) {
         setRemoteStream(stream);
         setIsCalling(false);
@@ -353,7 +361,7 @@ const App: React.FC = () => {
     });
 
     rtcServiceRef.current.onCallEnd(() => {
-      console.log('[App] 馃摓 Call ended');
+      console.log('[App] 📞 Call ended');
       if (isMounted.current) {
         setIsCallModalOpen(false);
         setLocalStream(null);
@@ -367,7 +375,7 @@ const App: React.FC = () => {
       const stream = await rtcServiceRef.current.answerCall();
       if (isMounted.current) {
         setLocalStream(stream);
-        console.log('[App] 鉁� Local stream started');
+        console.log('[App] ✅ Local stream started');
       }
     } catch (err: any) {
       console.error("[App] Failed to answer call:", err);
@@ -408,7 +416,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-zinc-900 flex items-center justify-center p-6">
         <div className="text-center space-y-4 max-w-md">
-          <div className="text-red-500 text-6xl mb-4">鈿狅笍</div>
+          <div className="text-red-500 text-6xl mb-4">⚠️</div>
           <h2 className="text-white text-2xl font-bold">Something Went Wrong</h2>
           <p className="text-zinc-400">{authError}</p>
           <button
@@ -431,138 +439,164 @@ const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans">
       
-      <Header user={currentUser} onLogout={logout} />
-
-      <div className="absolute inset-0 z-0">
-        <MapVisualizer 
-          role={currentUser.role} 
-          driverLocation={currentTrip?.driverLocation}
-          pickup={currentTrip?.pickup || pickupInput}
-          isSearching={currentTrip?.status === TripStatus.SEARCHING}
-          onLocationSelect={setPickupInput}
-        />
-      </div>
-
-      {/* Incoming Call Notification */}
-      {hasIncomingCall && !isCallModalOpen && (
-        <div className="absolute top-24 left-4 right-4 z-50 md:left-auto md:right-8 md:w-96">
-          <div className="bg-emerald-600 text-white rounded-2xl shadow-2xl p-6 animate-in slide-in-from-top duration-500">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center animate-pulse">
-                  <Phone size={24} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-lg">Incoming Call</h3>
-                  <p className="text-emerald-100 text-sm">
-                    {currentUser.role === UserRole.RIDER ? 'Driver' : 'Rider'} is calling...
-                  </p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setHasIncomingCall(false)}
-                className="flex-1 px-4 py-3 bg-white/20 text-white font-semibold rounded-xl hover:bg-white/30 transition-colors"
-              >
-                Decline
-              </button>
-              <button 
-                onClick={answerCall}
-                className="flex-1 px-4 py-3 bg-white text-emerald-600 font-semibold rounded-xl hover:bg-emerald-50 transition-colors shadow-lg"
-              >
-                Answer
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Show Global Header only on Home tab */}
+      {currentTab === 'home' && (
+        <Header user={currentUser} onLogout={logout} />
       )}
 
-      {/* Driver Incoming Trip Request */}
-      {currentUser.role === UserRole.DRIVER && availableTrip && !currentTrip && (
-        <div className="absolute top-24 left-4 right-4 z-40 md:left-auto md:right-8 md:w-96">
-          <div className="bg-white rounded-2xl shadow-2xl border-2 border-emerald-500 p-6 animate-in slide-in-from-top duration-500">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
-                  <Navigation size={20} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-zinc-900">New Trip Request!</h3>
-                  <p className="text-sm text-zinc-500">{availableTrip.fare} NGN</p>
-                </div>
-              </div>
-              <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded-full animate-pulse">
-                NEW
-              </span>
-            </div>
-            
-            <div className="space-y-3 mb-6">
-              <div className="flex items-center gap-3 text-zinc-700">
-                <MapPin size={18} className="text-zinc-400" />
-                <span className="text-sm font-medium">{availableTrip.pickup}</span>
-              </div>
-              <div className="flex items-center gap-3 text-zinc-700">
-                <MapPin size={18} className="text-emerald-500" />
-                <span className="text-sm font-medium">{availableTrip.destination}</span>
-              </div>
-            </div>
-
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setAvailableTrip(null)}
-                className="flex-1 px-4 py-3 bg-zinc-100 text-zinc-700 font-semibold rounded-xl hover:bg-zinc-200 transition-colors"
-              >
-                Decline
-              </button>
-              <button 
-                onClick={acceptTrip}
-                className="flex-1 px-4 py-3 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-lg"
-              >
-                Accept
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bottom Controls */}
-      <div className="absolute bottom-0 left-0 right-0 z-30 p-4 md:max-w-md md:mx-auto md:bottom-8">
+      {/* Main Content Area */}
+      <div className="flex-1 relative">
         
-        {currentUser.role === UserRole.RIDER && !currentTrip && (
-          <RideRequestPanel 
-            pickup={pickupInput}
-            setPickup={setPickupInput}
-            destination={destinationInput}
-            setDestination={setDestinationInput}
-            onRequest={requestTrip}
-            isLoading={isRequesting}
-            error={requestError}
-          />
-        )}
+        {/* HOME TAB CONTENT (Map, Request, etc.) */}
+        <div 
+          className="absolute inset-0 flex flex-col"
+          style={{ 
+            visibility: currentTab === 'home' ? 'visible' : 'hidden',
+            pointerEvents: currentTab === 'home' ? 'auto' : 'none' 
+          }}
+        >
+          <div className="absolute inset-0 z-0">
+            <MapVisualizer 
+              role={currentUser.role} 
+              driverLocation={currentTrip?.driverLocation}
+              pickup={currentTrip?.pickup || pickupInput}
+              isSearching={currentTrip?.status === TripStatus.SEARCHING}
+              onLocationSelect={setPickupInput}
+            />
+          </div>
 
-        {currentTrip && (
-          <TripStatusPanel 
-            trip={currentTrip}
-            userRole={currentUser.role}
-            onStatusUpdate={updateTripStatus}
-            onCall={initiateCall}
-          />
-        )}
-
-        {currentUser.role === UserRole.DRIVER && !currentTrip && !availableTrip && (
-           <div className="bg-white rounded-2xl shadow-xl p-6 text-center border border-zinc-100">
-              <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-                <Car size={32} className="text-emerald-600" />
+          {/* Incoming Call Notification */}
+          {hasIncomingCall && !isCallModalOpen && (
+            <div className="absolute top-24 left-4 right-4 z-50 md:left-auto md:right-8 md:w-96">
+              <div className="bg-emerald-600 text-white rounded-2xl shadow-2xl p-6 animate-in slide-in-from-top duration-500">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center animate-pulse">
+                      <Phone size={24} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg">Incoming Call</h3>
+                      <p className="text-emerald-100 text-sm">
+                        {currentUser.role === UserRole.RIDER ? 'Driver' : 'Rider'} is calling...
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setHasIncomingCall(false)}
+                    className="flex-1 px-4 py-3 bg-white/20 text-white font-semibold rounded-xl hover:bg-white/30 transition-colors"
+                  >
+                    Decline
+                  </button>
+                  <button 
+                    onClick={answerCall}
+                    className="flex-1 px-4 py-3 bg-white text-emerald-600 font-semibold rounded-xl hover:bg-emerald-50 transition-colors shadow-lg"
+                  >
+                    Answer
+                  </button>
+                </div>
               </div>
-              <h3 className="text-xl font-bold text-zinc-900">You are Online</h3>
-              <p className="text-zinc-500 mt-1">Waiting for ride requests...</p>
-           </div>
+            </div>
+          )}
+
+          {/* Driver Incoming Trip Request */}
+          {currentUser.role === UserRole.DRIVER && availableTrip && !currentTrip && (
+            <div className="absolute top-24 left-4 right-4 z-40 md:left-auto md:right-8 md:w-96">
+              <div className="bg-white rounded-2xl shadow-2xl border-2 border-emerald-500 p-6 animate-in slide-in-from-top duration-500">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
+                      <Navigation size={20} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-zinc-900">New Trip Request!</h3>
+                      <p className="text-sm text-zinc-500">{availableTrip.fare} NGN</p>
+                    </div>
+                  </div>
+                  <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded-full animate-pulse">
+                    NEW
+                  </span>
+                </div>
+                
+                <div className="space-y-3 mb-6">
+                  <div className="flex items-center gap-3 text-zinc-700">
+                    <MapPin size={18} className="text-zinc-400" />
+                    <span className="text-sm font-medium">{availableTrip.pickup}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-zinc-700">
+                    <MapPin size={18} className="text-emerald-500" />
+                    <span className="text-sm font-medium">{availableTrip.destination}</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setAvailableTrip(null)}
+                    className="flex-1 px-4 py-3 bg-zinc-100 text-zinc-700 font-semibold rounded-xl hover:bg-zinc-200 transition-colors"
+                  >
+                    Decline
+                  </button>
+                  <button 
+                    onClick={acceptTrip}
+                    className="flex-1 px-4 py-3 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-lg"
+                  >
+                    Accept
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Bottom Controls for Home */}
+          <div className="absolute bottom-20 left-0 right-0 z-30 p-4 md:max-w-md md:mx-auto md:bottom-28">
+            
+            {currentUser.role === UserRole.RIDER && !currentTrip && (
+              <RideRequestPanel 
+                pickup={pickupInput}
+                setPickup={setPickupInput}
+                destination={destinationInput}
+                setDestination={setDestinationInput}
+                onRequest={requestTrip}
+                isLoading={isRequesting}
+                error={requestError}
+              />
+            )}
+
+            {currentTrip && (
+              <TripStatusPanel 
+                trip={currentTrip}
+                userRole={currentUser.role}
+                onStatusUpdate={updateTripStatus}
+                onCall={initiateCall}
+              />
+            )}
+
+            {currentUser.role === UserRole.DRIVER && !currentTrip && !availableTrip && (
+              <div className="bg-white rounded-2xl shadow-xl p-6 text-center border border-zinc-100">
+                  <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                    <Car size={32} className="text-emerald-600" />
+                  </div>
+                  <h3 className="text-xl font-bold text-zinc-900">You are Online</h3>
+                  <p className="text-zinc-500 mt-1">Waiting for ride requests...</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* SERVICES TAB */}
+        {currentTab === 'services' && (
+          <Services />
+        )}
+
+        {/* ACCOUNT TAB */}
+        {currentTab === 'account' && (
+          <Account user={currentUser} onLogout={logout} />
         )}
       </div>
 
-      {/* Call Modal */}
+      {/* Call Modal - Always visible if active */}
       {isCallModalOpen && (
         <CallModal 
           localStream={localStream}
@@ -572,6 +606,13 @@ const App: React.FC = () => {
           remoteUserName={currentUser.role === UserRole.RIDER ? "Driver" : "Rider"}
         />
       )}
+
+      {/* Bottom Navigation */}
+      <BottomNav 
+        currentTab={currentTab} 
+        onTabChange={setCurrentTab} 
+        hasActiveTrip={!!currentTrip}
+      />
     </div>
   );
 };
