@@ -31,19 +31,22 @@ const App: React.FC = () => {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const rtcServiceRef = useRef<WebRTCService | null>(null);
+  
+  // Refs to track if we're mounted
+  const isMounted = useRef(true);
+  const authSubscriptionRef = useRef<any>(null);
 
   // --- Auth Handlers ---
   useEffect(() => {
-    let isMounted = true;
-    let authSubscription: any = null;
-
+    isMounted.current = true;
+    
     const initAuth = async () => {
       try {
         console.log('🔐 Starting auth initialization...');
         
         // Add a timeout to prevent infinite loading
         const timeoutId = setTimeout(() => {
-          if (isMounted && isAuthLoading) {
+          if (isMounted.current && isAuthLoading) {
             console.warn('⚠️ Auth check timeout - forcing completion');
             setIsAuthLoading(false);
           }
@@ -54,7 +57,7 @@ const App: React.FC = () => {
         
         clearTimeout(timeoutId);
 
-        if (!isMounted) return;
+        if (!isMounted.current) return;
 
         if (user) {
           console.log('✅ User session restored:', user.email);
@@ -66,7 +69,7 @@ const App: React.FC = () => {
 
       } catch (error) {
         console.error('❌ Auth initialization error:', error);
-        if (isMounted) {
+        if (isMounted.current) {
           setIsAuthLoading(false);
           setAuthError('Failed to load. Please try again.');
         }
@@ -77,26 +80,32 @@ const App: React.FC = () => {
     initAuth();
 
     // Setup auth state listener
-    const setupAuthListener = async () => {
-      authSubscription = authService.onAuthStateChange((user) => {
-        if (!isMounted) return;
+    authSubscriptionRef.current = authService.onAuthStateChange((user) => {
+      if (!isMounted.current) return;
+      
+      console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
+      setCurrentUser(user);
+      
+      // Clear trip data when user logs out
+      if (!user) {
+        setCurrentTrip(null);
+        setAvailableTrip(null);
+        setIsCallModalOpen(false);
+        setLocalStream(null);
+        setRemoteStream(null);
         
-        console.log('🔄 Auth state changed:', user ? user.email : 'Logged out');
-        setCurrentUser(user);
-        
-        if (!user) {
-          setCurrentTrip(null);
-          setAvailableTrip(null);
+        // End any active calls
+        if (rtcServiceRef.current) {
+          rtcServiceRef.current.endCall(false);
+          rtcServiceRef.current = null;
         }
-      });
-    };
-
-    setupAuthListener();
+      }
+    });
 
     return () => {
-      isMounted = false;
-      if (authSubscription?.data?.subscription) {
-        authSubscription.data.subscription.unsubscribe();
+      isMounted.current = false;
+      if (authSubscriptionRef.current?.subscription) {
+        authSubscriptionRef.current.subscription.unsubscribe();
       }
     };
   }, []);
@@ -136,13 +145,32 @@ const App: React.FC = () => {
 
   const logout = async () => {
     try {
-      await authService.signOut();
+      console.log('👋 Logging out...');
+      
+      // Clear local state first
       setCurrentUser(null);
       setCurrentTrip(null);
       setAvailableTrip(null);
       setIsCallModalOpen(false);
+      setLocalStream(null);
+      setRemoteStream(null);
+      
+      // End any active calls
+      if (rtcServiceRef.current) {
+        rtcServiceRef.current.endCall(false);
+        rtcServiceRef.current = null;
+      }
+      
+      // Sign out from auth service (this will clear storage)
+      await authService.signOut();
+      
+      console.log('✅ Logout complete');
     } catch (error) {
       console.error('Error logging out:', error);
+      // Even on error, ensure local state is cleared
+      setCurrentUser(null);
+      setCurrentTrip(null);
+      setAvailableTrip(null);
     }
   };
 
@@ -218,12 +246,13 @@ const App: React.FC = () => {
 
     if (!targetUserId) {
       console.error('Cannot start call: missing target user ID');
+      alert('Cannot start call: Other user not connected to trip');
       return;
     }
 
     console.log('📞 Starting call...', {
-      from: currentUser.id,
-      to: targetUserId,
+      from: currentUser.id.substring(0, 8),
+      to: targetUserId.substring(0, 8),
       tripId: currentTrip.id
     });
 
@@ -240,26 +269,38 @@ const App: React.FC = () => {
 
     rtc.onRemoteStream((stream) => {
       console.log('✅ Remote stream received');
-      setRemoteStream(stream);
-      setIsCalling(false);
+      if (isMounted.current) {
+        setRemoteStream(stream);
+        setIsCalling(false);
+      }
     });
 
     rtc.onCallEnd(() => {
       console.log('📞 Call ended');
-      setIsCallModalOpen(false);
-      setLocalStream(null);
-      setRemoteStream(null);
+      if (isMounted.current) {
+        setIsCallModalOpen(false);
+        setLocalStream(null);
+        setRemoteStream(null);
+        setIsCalling(false);
+      }
     });
 
     try {
-      const stream = await rtc.startCall(true);
-      setLocalStream(stream);
-      console.log('✅ Local stream started');
-    } catch (err) {
+      // The caller initiates (first to call), receiver joins
+      const isInitiator = isRider; // Rider typically calls first
+      const stream = await rtc.startCall(isInitiator);
+      
+      if (isMounted.current) {
+        setLocalStream(stream);
+        console.log('✅ Local stream started');
+      }
+    } catch (err: any) {
       console.error("Failed to start call:", err);
-      setIsCallModalOpen(false);
-      setIsCalling(false);
-      alert('Failed to access camera/microphone. Please check permissions.');
+      if (isMounted.current) {
+        setIsCallModalOpen(false);
+        setIsCalling(false);
+        alert(err.message || 'Failed to start call. Please check permissions.');
+      }
     }
   };
 
@@ -268,6 +309,7 @@ const App: React.FC = () => {
     setIsCallModalOpen(false);
     setLocalStream(null);
     setRemoteStream(null);
+    setIsCalling(false);
   };
 
   // --- Loading State ---
