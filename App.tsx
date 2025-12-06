@@ -114,6 +114,50 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // --- 1. TRIP MANAGEMENT (Realtime + Polling) ---
+  // This replaces the ad-hoc subscription in requestTrip with a robust persistent listener
+  useEffect(() => {
+    if (!currentTrip) return;
+
+    // A. Realtime Subscription
+    console.log('[App] 📡 Subscribing to trip updates:', currentTrip.id);
+    const subscription = supabase.subscribe(`trip-${currentTrip.id}`, (data) => {
+      if (data.event === 'trip_updated') {
+        console.log('[App] 🔄 Realtime update:', data.payload.trip.status);
+        setCurrentTrip(data.payload.trip);
+      } else if (data.event === 'location_update') {
+        setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
+      }
+    });
+
+    // B. Polling Fallback (For robustness against socket drops)
+    // Poll every 3s if searching (critical), 10s if active (less critical)
+    const pollInterval = currentTrip.status === TripStatus.SEARCHING ? 3000 : 10000;
+    
+    const poller = setInterval(async () => {
+      if (!isMounted.current) return;
+      
+      try {
+        const freshTrip = await supabase.getTripById(currentTrip.id);
+        if (freshTrip) {
+          // Check if status changed or driver assigned (sync drift)
+          if (freshTrip.status !== currentTrip.status || freshTrip.driverId !== currentTrip.driverId) {
+            console.log('[App] 📥 Polling sync mismatch found. Updating...');
+            setCurrentTrip(freshTrip);
+          }
+        }
+      } catch (err) {
+        console.warn('[App] Polling failed', err);
+      }
+    }, pollInterval);
+
+    return () => {
+      console.log('[App] 🔌 Unsubscribing trip updates');
+      subscription.unsubscribe();
+      clearInterval(poller);
+    };
+  }, [currentTrip?.id, currentTrip?.status, currentTrip?.driverId]);
+
   // --- Setup WebRTC Listener when trip becomes active ---
   useEffect(() => {
     if (!currentUser || !currentTrip) return;
@@ -126,7 +170,7 @@ const App: React.FC = () => {
       : currentTrip.riderId;
 
     if (!targetUserId) {
-      console.warn('[App] Cannot setup call listener: missing target user');
+      // If we don't have a target user yet, we can't connect
       return;
     }
 
@@ -174,6 +218,7 @@ const App: React.FC = () => {
 
         subscription = supabase.subscribeToAvailableTrips((trip) => {
           console.log('📡 New trip available:', trip);
+          // Only show available trip if we aren't currently in one
           if (!currentTrip) {
             setAvailableTrip(trip);
           }
@@ -230,15 +275,8 @@ const App: React.FC = () => {
     
     try {
       const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
+      // We just set the trip here. The useEffect above handles the subscription automatically.
       setCurrentTrip(trip);
-
-      supabase.subscribe(`trip-${trip.id}`, (data) => {
-        if (data.event === 'trip_updated') {
-          setCurrentTrip(data.payload.trip);
-        } else if (data.event === 'location_update') {
-          setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
-        }
-      });
       
     } catch (error: any) {
       console.error('Error requesting trip:', error);
@@ -256,12 +294,7 @@ const App: React.FC = () => {
       if (trip) {
         setCurrentTrip(trip);
         setAvailableTrip(null);
-
-        supabase.subscribe(`trip-${trip.id}`, (data) => {
-          if (data.event === 'trip_updated') {
-            setCurrentTrip(data.payload.trip);
-          }
-        });
+        // Again, subscription is handled by the useEffect automatically
       } else {
         // If accept returns null, it likely failed or trip was taken
         setAvailableTrip(null);
