@@ -534,6 +534,7 @@ const App: React.FC = () => {
               role={currentUser.role} 
               driverLocation={currentTrip?.driverLocation}
               pickup={currentTrip?.pickup || pickupInput}
+              destination={currentTrip?.destination || destinationInput}
               isSearching={currentTrip?.status === TripStatus.SEARCHING}
               onLocationSelect={setPickupInput}
             />
