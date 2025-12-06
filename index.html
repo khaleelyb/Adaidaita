@@ -21,8 +21,10 @@
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='45' fill='%23059669'/%3E%3Cpath d='M30 40 L50 25 L70 40 L70 75 L30 75 Z' fill='white'/%3E%3C/svg%3E" />
     
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <!-- Leaflet CSS - CRITICAL FOR MAP -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" 
+          crossorigin="" />
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -47,16 +49,48 @@
       * {
         -webkit-tap-highlight-color: transparent;
         -webkit-touch-callout: none;
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        position: fixed;
       }
       
       body {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         background-color: #f4f4f5;
         overscroll-behavior: none;
-        overflow: hidden;
-        position: fixed;
+      }
+      
+      #root {
         width: 100%;
         height: 100%;
+      }
+      
+      /* CRITICAL: Leaflet map container styles */
+      .leaflet-container {
+        width: 100% !important;
+        height: 100% !important;
+        z-index: 0;
+        font-family: 'Inter', sans-serif;
+        background: #f4f4f5;
+      }
+      
+      .leaflet-marker-icon {
+        background: transparent !important;
+        border: none !important;
+      }
+      
+      .custom-car-marker,
+      .custom-location-marker,
+      .custom-destination-marker {
+        background: transparent !important;
+        border: none !important;
       }
       
       /* Safe area support for notched devices */
@@ -71,25 +105,27 @@
       }
       
       /* Leaflet map styles */
-      .leaflet-container {
-        width: 100%;
-        height: 100%;
-        z-index: 0;
-        font-family: 'Inter', sans-serif;
-      }
-      
       .leaflet-control-attribution {
         font-size: 9px;
-        background: rgba(255, 255, 255, 0.8);
+        background: rgba(255, 255, 255, 0.8) !important;
         backdrop-filter: blur(10px);
         border-radius: 8px;
         padding: 4px 8px;
       }
       
-      /* Custom marker styles */
-      .custom-marker-icon {
-        background: transparent;
-        border: none;
+      /* Leaflet popup styling */
+      .leaflet-popup-content-wrapper {
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      }
+      
+      .leaflet-popup-content {
+        margin: 12px 16px;
+        font-family: 'Inter', sans-serif;
+      }
+      
+      .leaflet-popup-tip {
+        background: white;
       }
       
       /* Smooth animations */
@@ -148,6 +184,18 @@
       @media (hover: none) {
         button:active {
           transform: scale(0.98);
+        }
+      }
+
+      /* Pulse animation for markers */
+      @keyframes pulse {
+        0%, 100% {
+          opacity: 0.3;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.1;
+          transform: scale(1.5);
         }
       }
     </style>
