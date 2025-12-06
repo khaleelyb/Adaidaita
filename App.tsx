@@ -42,6 +42,7 @@ const App: React.FC = () => {
   // Refs
   const isMounted = useRef(true);
   const authSubscriptionRef = useRef<any>(null);
+  const lastLocalUpdateRef = useRef<number>(0);
 
   // --- Auth Handlers ---
   useEffect(() => {
@@ -115,7 +116,6 @@ const App: React.FC = () => {
   }, []);
 
   // --- 1. TRIP MANAGEMENT (Realtime + Polling) ---
-  // This replaces the ad-hoc subscription in requestTrip with a robust persistent listener
   useEffect(() => {
     if (!currentTrip) return;
 
@@ -123,38 +123,54 @@ const App: React.FC = () => {
     console.log('[App] 📡 Subscribing to trip updates:', currentTrip.id);
     const subscription = supabase.subscribe(`trip-${currentTrip.id}`, (data) => {
       if (data.event === 'trip_updated') {
-        console.log('[App] 🔄 Realtime update:', data.payload.trip.status);
-        setCurrentTrip(data.payload.trip);
+        const newTrip = data.payload.trip;
+        
+        // Prevent older updates from overwriting optimistic local updates
+        const timeSinceLocalUpdate = Date.now() - lastLocalUpdateRef.current;
+        if (timeSinceLocalUpdate < 2000 && newTrip.status !== currentTrip.status) {
+          console.log('[App] ⏳ Ignoring realtime update due to recent local action');
+          return;
+        }
+
+        console.log('[App] 🔄 Realtime update:', newTrip.status);
+        setCurrentTrip(newTrip);
       } else if (data.event === 'location_update') {
         setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
       }
     });
 
-    // B. Polling Fallback (For robustness against socket drops)
-    // Poll every 3s if searching (critical), 10s if active (less critical)
-    const pollInterval = currentTrip.status === TripStatus.SEARCHING ? 3000 : 10000;
+    // B. Polling Fallback 
+    // ONLY poll if searching (critical) or if it's been a while since last action
+    const shouldPoll = currentTrip.status === TripStatus.SEARCHING;
     
-    const poller = setInterval(async () => {
-      if (!isMounted.current) return;
-      
-      try {
-        const freshTrip = await supabase.getTripById(currentTrip.id);
-        if (freshTrip) {
-          // Check if status changed or driver assigned (sync drift)
-          if (freshTrip.status !== currentTrip.status || freshTrip.driverId !== currentTrip.driverId) {
-            console.log('[App] 📥 Polling sync mismatch found. Updating...');
-            setCurrentTrip(freshTrip);
+    let poller: NodeJS.Timeout | null = null;
+    
+    if (shouldPoll) {
+       poller = setInterval(async () => {
+        if (!isMounted.current) return;
+        
+        // Don't poll if we just updated locally
+        if (Date.now() - lastLocalUpdateRef.current < 5000) return;
+
+        try {
+          const freshTrip = await supabase.getTripById(currentTrip.id);
+          if (freshTrip) {
+            // Only update if critical fields changed
+            if (freshTrip.status !== currentTrip.status || freshTrip.driverId !== currentTrip.driverId) {
+              console.log('[App] 📥 Polling sync mismatch found. Updating...');
+              setCurrentTrip(freshTrip);
+            }
           }
+        } catch (err) {
+          console.warn('[App] Polling failed', err);
         }
-      } catch (err) {
-        console.warn('[App] Polling failed', err);
-      }
-    }, pollInterval);
+      }, 3000);
+    }
 
     return () => {
       console.log('[App] 🔌 Unsubscribing trip updates');
       subscription.unsubscribe();
-      clearInterval(poller);
+      if (poller) clearInterval(poller);
     };
   }, [currentTrip?.id, currentTrip?.status, currentTrip?.driverId]);
 
@@ -323,6 +339,9 @@ const App: React.FC = () => {
     }
     
     console.log(`Updating trip status from ${currentTrip.status} to ${status}`);
+
+    // Track local update time to prevent race conditions
+    lastLocalUpdateRef.current = Date.now();
 
     // OPTIMISTIC UPDATE: Update UI immediately
     const previousTrip = { ...currentTrip };
