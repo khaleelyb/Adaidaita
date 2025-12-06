@@ -13,6 +13,8 @@ export class WebRTCService {
   private candidateQueue: RTCIceCandidate[] = [];
   private channel: any = null;
   private isInitiator: boolean = false;
+  private isChannelReady: boolean = false;
+  private hasRemoteDescription: boolean = false;
 
   constructor(tripId: string, currentUserId: string, targetUserId: string) {
     this.tripId = tripId;
@@ -30,10 +32,7 @@ export class WebRTCService {
     this.isInitiator = isCaller;
     console.log(`[WebRTC] 📞 Starting call as ${isCaller ? 'CALLER' : 'RECEIVER'}`);
 
-    // 1. Setup Signaling Channel FIRST
-    await this.setupSignalingChannel();
-
-    // 2. Get Local Media
+    // 1. Get Local Media FIRST
     try {
       console.log('[WebRTC] 🎥 Requesting media devices...');
       this.localStream = await navigator.mediaDevices.getUserMedia({ 
@@ -54,11 +53,16 @@ export class WebRTCService {
       throw new Error('Cannot access camera/microphone. Please grant permissions and try again.');
     }
 
+    // 2. Setup Signaling Channel
+    await this.setupSignalingChannel();
+
     // 3. Create Peer Connection
     console.log('[WebRTC] 🔗 Creating peer connection...');
     this.peerConnection = new RTCPeerConnection({ 
       iceServers: ICE_SERVERS,
-      iceCandidatePoolSize: 10
+      iceCandidatePoolSize: 10,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require'
     });
 
     // 4. Add Local Tracks
@@ -70,17 +74,26 @@ export class WebRTCService {
     });
 
     // 5. Handle Remote Stream
+    this.remoteStream = new MediaStream();
     this.peerConnection.ontrack = (event) => {
       console.log('[WebRTC] 📥 Received remote track:', event.track.kind);
       
-      if (event.streams && event.streams[0]) {
+      event.track.onunmute = () => {
+        console.log('[WebRTC] 🔊 Track unmuted:', event.track.kind);
         if (!this.remoteStream) {
-          console.log('[WebRTC] 🎉 Remote stream established!');
-          this.remoteStream = event.streams[0];
-          if (this.onRemoteStreamCallback) {
-            this.onRemoteStreamCallback(this.remoteStream);
-          }
+          this.remoteStream = new MediaStream();
         }
+        this.remoteStream.addTrack(event.track);
+        
+        if (this.onRemoteStreamCallback && this.remoteStream.getTracks().length > 0) {
+          console.log('[WebRTC] 🎉 Remote stream ready with', this.remoteStream.getTracks().length, 'tracks');
+          this.onRemoteStreamCallback(this.remoteStream);
+        }
+      };
+      
+      // Also add track immediately
+      if (this.remoteStream) {
+        this.remoteStream.addTrack(event.track);
       }
     };
 
@@ -91,6 +104,8 @@ export class WebRTCService {
         this.sendSignal('candidate', {
           candidate: event.candidate.toJSON()
         });
+      } else {
+        console.log('[WebRTC] ✅ ICE gathering complete');
       }
     };
 
@@ -99,75 +114,129 @@ export class WebRTCService {
       const state = this.peerConnection?.iceConnectionState;
       console.log('[WebRTC] 🔌 ICE state:', state);
       
-      if (state === 'connected') {
+      if (state === 'connected' || state === 'completed') {
         console.log('[WebRTC] ✅ Peer-to-peer connection established!');
-      } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-        console.warn('[WebRTC] ⚠️ Connection lost:', state);
-        if (state === 'failed') {
-          this.endCall();
-        }
+      } else if (state === 'disconnected') {
+        console.warn('[WebRTC] ⚠️ Connection disconnected, waiting for reconnection...');
+      } else if (state === 'failed') {
+        console.error('[WebRTC] ❌ Connection failed');
+        this.endCall();
+      } else if (state === 'closed') {
+        console.log('[WebRTC] 🔒 Connection closed');
       }
     };
 
     this.peerConnection.onconnectionstatechange = () => {
-      console.log('[WebRTC] 🔄 Connection state:', this.peerConnection?.connectionState);
+      const state = this.peerConnection?.connectionState;
+      console.log('[WebRTC] 🔄 Connection state:', state);
+      
+      if (state === 'connected') {
+        console.log('[WebRTC] 🎉 Fully connected!');
+      }
     };
 
-    // 8. Wait a moment for channel to be ready
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    this.peerConnection.onsignalingstatechange = () => {
+      console.log('[WebRTC] 📡 Signaling state:', this.peerConnection?.signalingState);
+    };
+
+    // 8. Wait for channel to be ready
+    console.log('[WebRTC] ⏳ Waiting for signaling channel...');
+    await this.waitForChannelReady();
 
     // 9. If Caller, Create Offer
     if (isCaller) {
+      console.log('[WebRTC] 📞 Caller initiating offer...');
       await this.createAndSendOffer();
     } else {
-      console.log('[WebRTC] ⏳ Waiting for offer from caller...');
+      console.log('[WebRTC] 📱 Receiver waiting for offer...');
     }
 
     return this.localStream;
+  }
+
+  private async waitForChannelReady(timeout: number = 5000): Promise<void> {
+    const startTime = Date.now();
+    while (!this.isChannelReady) {
+      if (Date.now() - startTime > timeout) {
+        throw new Error('Signaling channel timeout');
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    console.log('[WebRTC] ✅ Signaling channel ready!');
   }
 
   private async setupSignalingChannel() {
     const channelName = `webrtc-${this.tripId}`;
     console.log('[WebRTC] 📡 Setting up broadcast channel:', channelName);
 
-    this.channel = supabaseClient
-      .channel(channelName, {
-        config: {
-          broadcast: { 
-            self: false, // Don't receive our own messages
-            ack: false 
-          },
-          presence: { key: this.currentUserId }
-        }
-      })
-      .on('broadcast', { event: 'signal' }, ({ payload }) => {
-        this.handleSignal(payload);
-      })
-      .on('presence', { event: 'sync' }, () => {
-        const state = this.channel.presenceState();
-        console.log('[WebRTC] 👥 Presence sync:', Object.keys(state).length, 'users');
-      })
-      .subscribe(async (status: string) => {
-        console.log('[WebRTC] 📡 Channel status:', status);
-        
-        if (status === 'SUBSCRIBED') {
-          console.log('[WebRTC] ✅ Signaling channel ready!');
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Channel setup timeout'));
+      }, 10000);
+
+      this.channel = supabaseClient
+        .channel(channelName, {
+          config: {
+            broadcast: { 
+              self: false,
+              ack: false 
+            },
+            presence: { key: this.currentUserId }
+          }
+        })
+        .on('broadcast', { event: 'signal' }, ({ payload }) => {
+          this.handleSignal(payload);
+        })
+        .on('presence', { event: 'sync' }, () => {
+          const state = this.channel.presenceState();
+          const users = Object.keys(state).length;
+          console.log('[WebRTC] 👥 Presence sync:', users, 'users');
           
-          // Track presence
-          await this.channel.track({
-            user_id: this.currentUserId,
-            online_at: new Date().toISOString()
-          });
-        }
-        
-        if (status === 'CHANNEL_ERROR') {
-          console.error('[WebRTC] ❌ Channel error!');
-        }
-      });
+          if (users >= 2) {
+            console.log('[WebRTC] ✅ Both peers present!');
+          }
+        })
+        .on('presence', { event: 'join' }, ({ key }) => {
+          console.log('[WebRTC] 👋 User joined:', key.substring(0, 8));
+        })
+        .on('presence', { event: 'leave' }, ({ key }) => {
+          console.log('[WebRTC] 👋 User left:', key.substring(0, 8));
+        })
+        .subscribe(async (status: string) => {
+          console.log('[WebRTC] 📡 Channel status:', status);
+          
+          if (status === 'SUBSCRIBED') {
+            clearTimeout(timeout);
+            console.log('[WebRTC] ✅ Channel subscribed!');
+            
+            try {
+              await this.channel.track({
+                user_id: this.currentUserId,
+                online_at: new Date().toISOString()
+              });
+              
+              this.isChannelReady = true;
+              resolve();
+            } catch (error) {
+              console.error('[WebRTC] ❌ Error tracking presence:', error);
+              this.isChannelReady = true;
+              resolve();
+            }
+          } else if (status === 'CHANNEL_ERROR') {
+            clearTimeout(timeout);
+            console.error('[WebRTC] ❌ Channel error!');
+            reject(new Error('Channel error'));
+          } else if (status === 'TIMED_OUT') {
+            clearTimeout(timeout);
+            console.error('[WebRTC] ❌ Channel timeout!');
+            reject(new Error('Channel timeout'));
+          }
+        });
+    });
   }
 
   private sendSignal(type: string, data: any) {
-    if (!this.channel) {
+    if (!this.channel || !this.isChannelReady) {
       console.error('[WebRTC] ❌ Cannot send signal: channel not ready');
       return;
     }
@@ -186,11 +255,14 @@ export class WebRTCService {
       type: 'broadcast',
       event: 'signal',
       payload: signal
+    }).then(() => {
+      console.log(`[WebRTC] ✅ Signal sent: ${type}`);
+    }).catch((error: any) => {
+      console.error(`[WebRTC] ❌ Failed to send signal: ${type}`, error);
     });
   }
 
   private async handleSignal(signal: any) {
-    // Only process signals meant for us
     if (signal.to !== this.currentUserId) {
       return;
     }
@@ -228,6 +300,11 @@ export class WebRTCService {
         offerToReceiveVideo: true
       });
       
+      console.log('[WebRTC] 📋 Offer created:', {
+        type: offer.type,
+        sdpLength: offer.sdp?.length
+      });
+      
       await this.peerConnection.setLocalDescription(offer);
       console.log('[WebRTC] ✅ Local description set (offer)');
       
@@ -248,6 +325,7 @@ export class WebRTCService {
       await this.peerConnection.setRemoteDescription(
         new RTCSessionDescription(data.sdp)
       );
+      this.hasRemoteDescription = true;
       console.log('[WebRTC] ✅ Remote description set (offer)');
       
       // Process queued candidates
@@ -256,6 +334,12 @@ export class WebRTCService {
       // Create answer
       console.log('[WebRTC] 📝 Creating answer...');
       const answer = await this.peerConnection.createAnswer();
+      
+      console.log('[WebRTC] 📋 Answer created:', {
+        type: answer.type,
+        sdpLength: answer.sdp?.length
+      });
+      
       await this.peerConnection.setLocalDescription(answer);
       console.log('[WebRTC] ✅ Local description set (answer)');
       
@@ -276,6 +360,7 @@ export class WebRTCService {
       await this.peerConnection.setRemoteDescription(
         new RTCSessionDescription(data.sdp)
       );
+      this.hasRemoteDescription = true;
       console.log('[WebRTC] ✅ Remote description set (answer)');
       
       // Process queued candidates
@@ -291,12 +376,11 @@ export class WebRTCService {
     try {
       const candidate = new RTCIceCandidate(data.candidate);
       
-      if (this.peerConnection.remoteDescription && 
-          this.peerConnection.remoteDescription.type) {
+      if (this.hasRemoteDescription) {
         await this.peerConnection.addIceCandidate(candidate);
         console.log('[WebRTC] ✅ ICE candidate added');
       } else {
-        console.log('[WebRTC] 📦 Queueing ICE candidate');
+        console.log('[WebRTC] 📦 Queueing ICE candidate (no remote description yet)');
         this.candidateQueue.push(candidate);
       }
     } catch (error) {
@@ -333,12 +417,10 @@ export class WebRTCService {
   endCall(sendSignal: boolean = true) {
     console.log('[WebRTC] 📵 Ending call...', { sendSignal });
 
-    // Send end signal to remote peer
-    if (sendSignal && this.channel) {
+    if (sendSignal && this.channel && this.isChannelReady) {
       this.sendSignal('end', {});
     }
 
-    // Stop local stream
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => {
         track.stop();
@@ -347,29 +429,27 @@ export class WebRTCService {
       this.localStream = null;
     }
 
-    // Close peer connection
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
       console.log('[WebRTC] 🔒 Peer connection closed');
     }
 
-    // Unsubscribe from channel
     if (this.channel) {
       supabaseClient.removeChannel(this.channel);
       this.channel = null;
       console.log('[WebRTC] 📡 Channel unsubscribed');
     }
 
-    // Clear state
     this.remoteStream = null;
     this.candidateQueue = [];
+    this.isChannelReady = false;
+    this.hasRemoteDescription = false;
 
     console.log('[WebRTC] ✅ Call cleanup complete');
 
-    // Trigger callback
     if (this.onCallEndCallback) {
       this.onCallEndCallback();
     }
   }
-            }
+}
