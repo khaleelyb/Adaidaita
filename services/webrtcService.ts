@@ -10,11 +10,13 @@ export class WebRTCService {
   private targetUserId: string;
   private onRemoteStreamCallback: ((stream: MediaStream) => void) | null = null;
   private onCallEndCallback: (() => void) | null = null;
+  private onIncomingCallCallback: (() => void) | null = null;
   private candidateQueue: RTCIceCandidate[] = [];
   private channel: any = null;
   private isInitiator: boolean = false;
   private isChannelReady: boolean = false;
   private hasRemoteDescription: boolean = false;
+  private isListening: boolean = false;
 
   constructor(tripId: string, currentUserId: string, targetUserId: string) {
     this.tripId = tripId;
@@ -28,8 +30,68 @@ export class WebRTCService {
     });
   }
 
-  async startCall(isCaller: boolean): Promise<MediaStream> {
-    this.isInitiator = isCaller;
+  /**
+   * Start listening for incoming calls
+   * This should be called as soon as a trip is active
+   */
+  async startListening() {
+    if (this.isListening) {
+      console.log('[WebRTC] ⚠️ Already listening for calls');
+      return;
+    }
+
+    console.log('[WebRTC] 👂 Starting to listen for incoming calls...');
+    this.isListening = true;
+
+    await this.setupSignalingChannel();
+  }
+
+  /**
+   * Stop listening for calls
+   */
+  stopListening() {
+    console.log('[WebRTC] 🔇 Stopping call listener...');
+    this.isListening = false;
+    
+    if (this.channel) {
+      supabaseClient.removeChannel(this.channel);
+      this.channel = null;
+      this.isChannelReady = false;
+    }
+  }
+
+  /**
+   * Callback for when someone tries to call you
+   */
+  onIncomingCall(callback: () => void) {
+    this.onIncomingCallCallback = callback;
+  }
+
+  /**
+   * Answer an incoming call
+   */
+  async answerCall(): Promise<MediaStream> {
+    console.log('[WebRTC] 📞 Answering incoming call...');
+    this.isInitiator = false;
+    return this.startCall(false);
+  }
+
+  /**
+   * Initiate a call (caller)
+   */
+  async initiateCall(): Promise<MediaStream> {
+    console.log('[WebRTC] 📞 Initiating outgoing call...');
+    this.isInitiator = true;
+    
+    // Ensure we're listening first
+    if (!this.isListening) {
+      await this.startListening();
+    }
+    
+    return this.startCall(true);
+  }
+
+  private async startCall(isCaller: boolean): Promise<MediaStream> {
     console.log(`[WebRTC] 📞 Starting call as ${isCaller ? 'CALLER' : 'RECEIVER'}`);
 
     // 1. Get Local Media FIRST
@@ -53,8 +115,10 @@ export class WebRTCService {
       throw new Error('Cannot access camera/microphone. Please grant permissions and try again.');
     }
 
-    // 2. Setup Signaling Channel
-    await this.setupSignalingChannel();
+    // 2. Ensure Signaling Channel is ready
+    if (!this.isChannelReady) {
+      await this.waitForChannelReady();
+    }
 
     // 3. Create Peer Connection
     console.log('[WebRTC] 🔗 Creating peer connection...');
@@ -78,22 +142,14 @@ export class WebRTCService {
     this.peerConnection.ontrack = (event) => {
       console.log('[WebRTC] 📥 Received remote track:', event.track.kind);
       
-      event.track.onunmute = () => {
-        console.log('[WebRTC] 🔊 Track unmuted:', event.track.kind);
-        if (!this.remoteStream) {
-          this.remoteStream = new MediaStream();
-        }
+      if (this.remoteStream) {
         this.remoteStream.addTrack(event.track);
         
+        // Notify when we have at least one track
         if (this.onRemoteStreamCallback && this.remoteStream.getTracks().length > 0) {
           console.log('[WebRTC] 🎉 Remote stream ready with', this.remoteStream.getTracks().length, 'tracks');
           this.onRemoteStreamCallback(this.remoteStream);
         }
-      };
-      
-      // Also add track immediately
-      if (this.remoteStream) {
-        this.remoteStream.addTrack(event.track);
       }
     };
 
@@ -135,26 +191,18 @@ export class WebRTCService {
       }
     };
 
-    this.peerConnection.onsignalingstatechange = () => {
-      console.log('[WebRTC] 📡 Signaling state:', this.peerConnection?.signalingState);
-    };
-
-    // 8. Wait for channel to be ready
-    console.log('[WebRTC] ⏳ Waiting for signaling channel...');
-    await this.waitForChannelReady();
-
-    // 9. If Caller, Create Offer
+    // 8. If Caller, Create Offer
     if (isCaller) {
       console.log('[WebRTC] 📞 Caller initiating offer...');
       await this.createAndSendOffer();
     } else {
-      console.log('[WebRTC] 📱 Receiver waiting for offer...');
+      console.log('[WebRTC] 📱 Receiver ready, waiting for offer...');
     }
 
     return this.localStream;
   }
 
-  private async waitForChannelReady(timeout: number = 5000): Promise<void> {
+  private async waitForChannelReady(timeout: number = 10000): Promise<void> {
     const startTime = Date.now();
     while (!this.isChannelReady) {
       if (Date.now() - startTime > timeout) {
@@ -196,12 +244,6 @@ export class WebRTCService {
             console.log('[WebRTC] ✅ Both peers present!');
           }
         })
-        .on('presence', { event: 'join' }, ({ key }) => {
-          console.log('[WebRTC] 👋 User joined:', key.substring(0, 8));
-        })
-        .on('presence', { event: 'leave' }, ({ key }) => {
-          console.log('[WebRTC] 👋 User left:', key.substring(0, 8));
-        })
         .subscribe(async (status: string) => {
           console.log('[WebRTC] 📡 Channel status:', status);
           
@@ -226,10 +268,6 @@ export class WebRTCService {
             clearTimeout(timeout);
             console.error('[WebRTC] ❌ Channel error!');
             reject(new Error('Channel error'));
-          } else if (status === 'TIMED_OUT') {
-            clearTimeout(timeout);
-            console.error('[WebRTC] ❌ Channel timeout!');
-            reject(new Error('Channel timeout'));
           }
         });
     });
@@ -255,19 +293,27 @@ export class WebRTCService {
       type: 'broadcast',
       event: 'signal',
       payload: signal
-    }).then(() => {
-      console.log(`[WebRTC] ✅ Signal sent: ${type}`);
-    }).catch((error: any) => {
-      console.error(`[WebRTC] ❌ Failed to send signal: ${type}`, error);
     });
   }
 
   private async handleSignal(signal: any) {
+    // Only process signals meant for us
     if (signal.to !== this.currentUserId) {
       return;
     }
 
     console.log(`[WebRTC] 📨 Received signal: ${signal.type} from ${signal.from.substring(0, 8)}`);
+
+    // If we receive an offer and we're just listening (not in a call yet)
+    if (signal.type === 'offer' && !this.peerConnection && this.isListening) {
+      console.log('[WebRTC] 🔔 Incoming call detected!');
+      
+      // Trigger incoming call callback
+      if (this.onIncomingCallCallback) {
+        this.onIncomingCallCallback();
+      }
+      return;
+    }
 
     if (!this.peerConnection) {
       console.warn('[WebRTC] ⚠️ Received signal but peer connection not ready');
@@ -300,11 +346,6 @@ export class WebRTCService {
         offerToReceiveVideo: true
       });
       
-      console.log('[WebRTC] 📋 Offer created:', {
-        type: offer.type,
-        sdpLength: offer.sdp?.length
-      });
-      
       await this.peerConnection.setLocalDescription(offer);
       console.log('[WebRTC] ✅ Local description set (offer)');
       
@@ -328,22 +369,14 @@ export class WebRTCService {
       this.hasRemoteDescription = true;
       console.log('[WebRTC] ✅ Remote description set (offer)');
       
-      // Process queued candidates
       await this.processCandidateQueue();
       
-      // Create answer
       console.log('[WebRTC] 📝 Creating answer...');
       const answer = await this.peerConnection.createAnswer();
-      
-      console.log('[WebRTC] 📋 Answer created:', {
-        type: answer.type,
-        sdpLength: answer.sdp?.length
-      });
       
       await this.peerConnection.setLocalDescription(answer);
       console.log('[WebRTC] ✅ Local description set (answer)');
       
-      // Send answer
       this.sendSignal('answer', { sdp: answer });
       console.log('[WebRTC] ✅ Answer sent to remote peer');
     } catch (error) {
@@ -363,7 +396,6 @@ export class WebRTCService {
       this.hasRemoteDescription = true;
       console.log('[WebRTC] ✅ Remote description set (answer)');
       
-      // Process queued candidates
       await this.processCandidateQueue();
     } catch (error) {
       console.error('[WebRTC] ❌ Error handling answer:', error);
@@ -380,7 +412,7 @@ export class WebRTCService {
         await this.peerConnection.addIceCandidate(candidate);
         console.log('[WebRTC] ✅ ICE candidate added');
       } else {
-        console.log('[WebRTC] 📦 Queueing ICE candidate (no remote description yet)');
+        console.log('[WebRTC] 📦 Queueing ICE candidate');
         this.candidateQueue.push(candidate);
       }
     } catch (error) {
@@ -399,7 +431,6 @@ export class WebRTCService {
     for (const candidate of queue) {
       try {
         await this.peerConnection.addIceCandidate(candidate);
-        console.log('[WebRTC] ✅ Queued candidate added');
       } catch (error) {
         console.error('[WebRTC] ❌ Error adding queued candidate:', error);
       }
@@ -424,7 +455,6 @@ export class WebRTCService {
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => {
         track.stop();
-        console.log(`[WebRTC] 🛑 Stopped ${track.kind} track`);
       });
       this.localStream = null;
     }
@@ -432,18 +462,10 @@ export class WebRTCService {
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
-      console.log('[WebRTC] 🔒 Peer connection closed');
-    }
-
-    if (this.channel) {
-      supabaseClient.removeChannel(this.channel);
-      this.channel = null;
-      console.log('[WebRTC] 📡 Channel unsubscribed');
     }
 
     this.remoteStream = null;
     this.candidateQueue = [];
-    this.isChannelReady = false;
     this.hasRemoteDescription = false;
 
     console.log('[WebRTC] ✅ Call cleanup complete');
@@ -451,5 +473,20 @@ export class WebRTCService {
     if (this.onCallEndCallback) {
       this.onCallEndCallback();
     }
+    
+    // Keep listening for new calls if we were listening before
+    if (this.isListening && !this.isChannelReady) {
+      console.log('[WebRTC] 🔄 Restarting listener...');
+      this.setupSignalingChannel();
+    }
   }
-}
+
+  /**
+   * Complete cleanup - stops listening too
+   */
+  destroy() {
+    console.log('[WebRTC] 💥 Destroying WebRTC service...');
+    this.endCall(false);
+    this.stopListening();
+  }
+            }
