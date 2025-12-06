@@ -1,21 +1,17 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-leaflet';
+import React, { useEffect, useState } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { Location, UserRole } from '../types';
-import { Search, X, MapPin, Locate } from 'lucide-react';
+import { Search, X, MapPin, Navigation2 } from 'lucide-react';
 import { INITIAL_MAP_CENTER } from '../constants';
 
-// Fix for default Leaflet marker icons in React
-import icon from 'leaflet/dist/images/marker-icon.png';
-import iconShadow from 'leaflet/dist/images/marker-shadow.png';
-
-let DefaultIcon = L.icon({
-    iconUrl: icon,
-    shadowUrl: iconShadow,
-    iconAnchor: [12, 41]
+// CRITICAL: Fix Leaflet default marker icons
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
-
-L.Marker.prototype.options.icon = DefaultIcon;
 
 interface MapVisualizerProps {
   role: UserRole;
@@ -26,7 +22,7 @@ interface MapVisualizerProps {
   onLocationSelect?: (locationName: string) => void;
 }
 
-// Mock coordinates fallback
+// Mock coordinates for the search demo (Kano, Nigeria)
 const MOCKED_LOCATIONS: Record<string, { lat: number; lng: number }> = {
   "Central Market": { lat: 12.0000, lng: 8.5900 },
   "Mallam Aminu Kano Int'l Airport": { lat: 12.0444, lng: 8.5323 },
@@ -39,74 +35,91 @@ const MOCKED_LOCATIONS: Record<string, { lat: number; lng: number }> = {
 
 const POPULAR_LOCATIONS = Object.keys(MOCKED_LOCATIONS);
 
-// Component to handle map movement
-const MapController: React.FC<{ 
-  center?: [number, number]; 
-  zoom?: number; 
-  pickupCoords?: [number, number] | null; 
-  destCoords?: [number, number] | null; 
-}> = ({ center, zoom, pickupCoords, destCoords }) => {
+// Component to handle map movement and auto-fit bounds
+const MapUpdater: React.FC<{ 
+  center: [number, number]; 
+  zoom?: number;
+  pickupCoords?: [number, number] | null;
+  destinationCoords?: [number, number] | null;
+  driverCoords?: [number, number] | null;
+}> = ({ center, zoom, pickupCoords, destinationCoords, driverCoords }) => {
   const map = useMap();
-
+  
   useEffect(() => {
-    if (pickupCoords && destCoords) {
-      // Fit bounds to show both pickup and destination (route view)
-      const bounds = L.latLngBounds([pickupCoords, destCoords]);
-      map.fitBounds(bounds, { padding: [50, 50], animate: true });
-    } else if (center) {
-      // Default fly to center
-      map.flyTo(center, zoom || map.getZoom());
+    try {
+      // If we have multiple points, fit bounds to show them all
+      if (pickupCoords && destinationCoords) {
+        const bounds = L.latLngBounds([pickupCoords, destinationCoords]);
+        
+        // Include driver location if available
+        if (driverCoords) {
+          bounds.extend(driverCoords);
+        }
+        
+        map.fitBounds(bounds, { 
+          padding: [80, 80],
+          maxZoom: 15,
+          animate: true,
+          duration: 1
+        });
+      } else {
+        map.flyTo(center, zoom || 14, {
+          animate: true,
+          duration: 1
+        });
+      }
+    } catch (error) {
+      console.error('Map update error:', error);
     }
-  }, [center, zoom, pickupCoords, destCoords, map]);
-
+  }, [center, zoom, pickupCoords, destinationCoords, driverCoords, map]);
+  
   return null;
 };
 
 // Custom Car Icon
-const createCarIcon = (rotation: number = 0) => L.divIcon({
-  className: 'custom-marker-icon',
-  html: `
-    <div style="transform: rotate(${rotation}deg); width: 40px; height: 60px; display: flex; align-items: center; justify-content: center;">
-      <div class="relative w-8 h-12 bg-emerald-600 rounded-md shadow-xl border-2 border-white flex flex-col items-center justify-between py-1">
-        <div class="w-6 h-1.5 bg-emerald-800/50 rounded-sm"></div>
-        <div class="w-6 h-2 bg-emerald-900/50 rounded-sm"></div>
-        <div class="absolute -top-8 left-1/2 -translate-x-1/2 w-12 h-20 bg-emerald-400/20 blur-xl rounded-full"></div>
+const createCarIcon = (rotation: number = 0) => {
+  return L.divIcon({
+    className: 'custom-car-marker',
+    html: `
+      <div style="transform: rotate(${rotation}deg); width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
+        <div style="width: 28px; height: 28px; background-color: #059669; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); border: 2px solid white; display: flex; align-items: center; justify-content: center;">
+          <span style="color: white; font-size: 18px;">🚗</span>
+        </div>
       </div>
-    </div>
-  `,
-  iconSize: [40, 60],
-  iconAnchor: [20, 30]
-});
+    `,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16]
+  });
+};
 
-// Custom Pickup Icon (Green)
-const createPickupIcon = () => L.divIcon({
-  className: 'custom-marker-icon',
-  html: `
-    <div class="flex flex-col items-center justify-center -translate-y-6">
-      <div class="bg-white p-2 rounded-full shadow-lg border-2 border-emerald-500">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="text-emerald-600"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+// Custom Current Location Icon (Blue Dot)
+const createCurrentLocationIcon = () => {
+  return L.divIcon({
+    className: 'custom-location-marker',
+    html: `
+      <div style="position: relative; width: 20px; height: 20px;">
+        <div style="width: 16px; height: 16px; background-color: #3b82f6; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
+        <div style="position: absolute; inset: 0; background-color: rgba(59, 130, 246, 0.3); border-radius: 50%; animation: pulse 2s infinite;"></div>
       </div>
-      <div class="w-2 h-8 bg-emerald-500/50 rounded-full blur-sm -mt-2"></div>
-    </div>
-  `,
-  iconSize: [40, 40],
-  iconAnchor: [20, 40]
-});
+    `,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10]
+  });
+};
 
-// Custom Destination Icon (Red)
-const createDestinationIcon = () => L.divIcon({
-  className: 'custom-marker-icon',
-  html: `
-    <div class="flex flex-col items-center justify-center -translate-y-6">
-      <div class="bg-white p-2 rounded-full shadow-lg border-2 border-red-500">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="text-red-500"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+// Custom Destination Icon (Red marker)
+const createDestinationIcon = () => {
+  return L.divIcon({
+    className: 'custom-destination-marker',
+    html: `
+      <div style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
+        <span style="font-size: 32px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">📍</span>
       </div>
-      <div class="w-2 h-8 bg-red-500/50 rounded-full blur-sm -mt-2"></div>
-    </div>
-  `,
-  iconSize: [40, 40],
-  iconAnchor: [20, 40]
-});
+    `,
+    iconSize: [32, 32],
+    iconAnchor: [16, 32]
+  });
+};
 
 export const MapVisualizer: React.FC<MapVisualizerProps> = ({ 
   role, 
@@ -118,120 +131,105 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
 }) => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  
-  // Coordinates state
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [mapCenter, setMapCenter] = useState<[number, number]>([INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng]);
-  const [pickupCoords, setPickupCoords] = useState<[number, number] | null>(null);
-  const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
+  const [isMapReady, setIsMapReady] = useState(false);
 
-  // Helper to fetch coordinates (Nominatim or Mock)
-  const getCoordinates = useCallback(async (address: string) => {
-    // 1. Check Mock Data
-    if (MOCKED_LOCATIONS[address]) {
-      return MOCKED_LOCATIONS[address];
+  // Get user's current location
+  useEffect(() => {
+    if (navigator.geolocation) {
+      console.log('Requesting geolocation...');
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
+          console.log('Got user location:', coords);
+          setUserLocation(coords);
+          setMapCenter(coords);
+        },
+        (error) => {
+          console.warn('Geolocation error:', error);
+          // Fallback to default location
+          const fallback: [number, number] = [INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng];
+          setUserLocation(fallback);
+          setMapCenter(fallback);
+        },
+        {
+          enableHighAccuracy: false,
+          timeout: 5000,
+          maximumAge: 0
+        }
+      );
+    } else {
+      // No geolocation available
+      const fallback: [number, number] = [INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng];
+      setUserLocation(fallback);
+      setMapCenter(fallback);
     }
-    
-    // 2. Real Geocoding via Nominatim
-    try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
-      const data = await response.json();
-      if (data && data.length > 0) {
-        return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-      }
-    } catch (error) {
-      console.warn("Geocoding failed:", error);
-    }
-    return null;
   }, []);
 
-  // Effect: Handle Pickup Geocoding
-  useEffect(() => {
-    if (!pickup) return;
-    
-    // Special case for "Current Location"
-    if (pickup === 'Current Location' && 'geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const { latitude, longitude } = pos.coords;
-          setPickupCoords([latitude, longitude]);
-          setMapCenter([latitude, longitude]);
-        },
-        (err) => console.warn(err)
-      );
-      return;
-    }
-
-    getCoordinates(pickup).then(coords => {
-      if (coords) {
-        setPickupCoords([coords.lat, coords.lng]);
-        setMapCenter([coords.lat, coords.lng]);
-      }
-    });
-  }, [pickup, getCoordinates]);
-
-  // Effect: Handle Destination Geocoding
-  useEffect(() => {
-    if (!destination) {
-      setDestCoords(null);
-      return;
-    }
-    
-    getCoordinates(destination).then(coords => {
-      if (coords) {
-        setDestCoords([coords.lat, coords.lng]);
-      }
-    });
-  }, [destination, getCoordinates]);
-
-  // Effect: Update Map Center based on Driver Location
+  // Update map center when driver moves
   useEffect(() => {
     if (driverLocation) {
       setMapCenter([driverLocation.lat, driverLocation.lng]);
     }
   }, [driverLocation]);
 
-  // Initial Geolocation on Mount (if no pickup is set yet)
-  useEffect(() => {
-    if (!pickup && 'geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition((pos) => {
-        const { latitude, longitude } = pos.coords;
-        setMapCenter([latitude, longitude]);
-      });
-    }
-  }, []);
-
   const handleSearchSelect = (loc: string) => {
     if (onLocationSelect) {
       onLocationSelect(loc);
+    }
+    const coords = MOCKED_LOCATIONS[loc];
+    if (coords) {
+      setMapCenter([coords.lat, coords.lng]);
     }
     setSearchQuery("");
     setIsSearchOpen(false);
   };
 
-  const handleLocateMe = () => {
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const { latitude, longitude } = pos.coords;
-          setMapCenter([latitude, longitude]);
-          // If the user wants to set pickup to current location
-          if (onLocationSelect) {
-            // We can't reverse geocode easily without API key in some services, 
-            // but we can assume the map center is enough visual feedback 
-            // OR set a special value "Current Location"
-            onLocationSelect("Current Location");
-          }
-        },
-        (err) => alert("Could not get your location. Please enable GPS.")
-      );
-    } else {
-      alert("Geolocation is not supported by your browser");
-    }
-  };
-
   const filteredLocations = POPULAR_LOCATIONS.filter(loc => 
     loc.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Get coordinates for pickup and destination
+  const pickupCoords: [number, number] | null = pickup && MOCKED_LOCATIONS[pickup] 
+    ? [MOCKED_LOCATIONS[pickup].lat, MOCKED_LOCATIONS[pickup].lng]
+    : userLocation;
+    
+  const destinationCoords: [number, number] | null = destination && MOCKED_LOCATIONS[destination]
+    ? [MOCKED_LOCATIONS[destination].lat, MOCKED_LOCATIONS[destination].lng]
+    : null;
+
+  const driverCoords: [number, number] | null = driverLocation 
+    ? [driverLocation.lat, driverLocation.lng]
+    : null;
+
+  // Calculate estimated distance and time
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  const distance = pickupCoords && destinationCoords
+    ? calculateDistance(pickupCoords[0], pickupCoords[1], destinationCoords[0], destinationCoords[1])
+    : 0;
+
+  const estimatedTime = Math.round(distance * 2.5); // Rough estimate: 2.5 min per km
+
+  console.log('Map render:', {
+    mapCenter,
+    userLocation,
+    pickupCoords,
+    destinationCoords,
+    driverCoords,
+    distance
+  });
 
   return (
     <div className="relative w-full h-full bg-zinc-100">
@@ -241,80 +239,112 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
         zoom={14} 
         scrollWheelZoom={true} 
         zoomControl={false}
-        className="w-full h-full z-0"
+        style={{ width: '100%', height: '100%' }}
+        className="z-0"
+        whenReady={() => {
+          console.log('Map is ready!');
+          setIsMapReady(true);
+        }}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          errorTileUrl="https://tile.openstreetmap.org/0/0/0.png"
         />
         
-        {/* Controls map view (flying, bounds) */}
-        <MapController 
+        <MapUpdater 
           center={mapCenter} 
-          pickupCoords={pickupCoords} 
-          destCoords={destCoords}
+          pickupCoords={pickupCoords}
+          destinationCoords={destinationCoords}
+          driverCoords={driverCoords}
         />
 
-        {/* Route Line (Polyline) */}
-        {pickupCoords && destCoords && (
+        {/* Route Line */}
+        {pickupCoords && destinationCoords && (
           <Polyline 
-            positions={[pickupCoords, destCoords]} 
-            color="#10b981" 
-            dashArray="10, 10" 
-            weight={4}
-            opacity={0.6}
+            positions={[pickupCoords, destinationCoords]}
+            pathOptions={{
+              color: '#059669',
+              weight: 4,
+              opacity: 0.8,
+              dashArray: '10, 10',
+              lineCap: 'round',
+              lineJoin: 'round'
+            }}
           />
         )}
 
-        {/* Driver Marker */}
-        {driverLocation && (
+        {/* User's Current Location (Blue Dot) */}
+        {userLocation && !driverLocation && (
           <Marker 
-            position={[driverLocation.lat, driverLocation.lng]} 
-            icon={createCarIcon(driverLocation.bearing)}
-          />
-        )}
-
-        {/* Pickup Marker */}
-        {pickupCoords && !driverLocation && (
-          <Marker 
-            position={pickupCoords} 
-            icon={createPickupIcon()}
+            position={userLocation} 
+            icon={createCurrentLocationIcon()}
           >
-            <Popup className="font-semibold">{pickup || "Pickup"}</Popup>
+            <Popup>Your Location</Popup>
           </Marker>
         )}
 
         {/* Destination Marker */}
-        {destCoords && (
+        {destinationCoords && (
           <Marker 
-            position={destCoords} 
+            position={destinationCoords} 
             icon={createDestinationIcon()}
           >
-            <Popup className="font-semibold">{destination || "Destination"}</Popup>
+            <Popup>{destination}</Popup>
           </Marker>
         )}
 
+        {/* Driver Marker */}
+        {driverCoords && (
+          <Marker 
+            position={driverCoords} 
+            icon={createCarIcon(driverLocation?.bearing || 0)}
+          >
+            <Popup>Driver Location</Popup>
+          </Marker>
+        )}
       </MapContainer>
 
-      {/* Searching Pulse Animation Overlay */}
-      {isSearching && (
-        <div className="absolute inset-0 flex items-center justify-center z-0 pointer-events-none">
-          <div className="w-96 h-96 bg-emerald-500/10 rounded-full animate-ping absolute"></div>
+      {/* Loading Overlay */}
+      {!isMapReady && (
+        <div className="absolute inset-0 bg-white flex items-center justify-center z-50">
+          <div className="text-center">
+            <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-zinc-600 font-medium">Loading map...</p>
+          </div>
         </div>
       )}
 
-      {/* Locate Me Button */}
-      <button 
-        onClick={handleLocateMe}
-        className="absolute top-4 right-4 z-[400] bg-white p-3 rounded-full shadow-lg text-zinc-600 hover:text-emerald-600 active:scale-95 transition-all"
-        title="Locate Me"
-      >
-        <Locate size={20} />
-      </button>
+      {/* Searching Pulse Animation Overlay */}
+      {isSearching && isMapReady && (
+        <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+          <div className="w-96 h-96 bg-emerald-500/10 rounded-full animate-ping"></div>
+        </div>
+      )}
 
-      {/* Search Controls (only if needed) */}
-      {onLocationSelect && !isSearching && (
-        <div className="absolute top-24 left-4 z-[400] flex flex-col items-start space-y-2">
+      {/* Trip Info Overlay */}
+      {pickupCoords && destinationCoords && distance > 0 && isMapReady && (
+        <div className="absolute top-24 right-4 z-40 bg-white rounded-xl shadow-lg p-3 border border-zinc-100">
+          <div className="flex items-center gap-2 mb-1">
+            <Navigation2 size={16} className="text-emerald-600" />
+            <span className="text-xs font-bold text-zinc-600">ROUTE INFO</span>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-zinc-500">Distance:</span>
+              <span className="text-sm font-bold text-zinc-900">{distance.toFixed(1)} km</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-zinc-500">Est. Time:</span>
+              <span className="text-sm font-bold text-zinc-900">{estimatedTime} min</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Controls Layer */}
+      {onLocationSelect && !isSearching && isMapReady && (
+        <div className="absolute top-24 left-4 z-40 flex flex-col items-start space-y-2">
           {!isSearchOpen ? (
              <button 
                onClick={() => setIsSearchOpen(true)}
@@ -323,7 +353,7 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
                <Search size={20} />
              </button>
           ) : (
-            <div className="bg-white rounded-2xl shadow-xl border border-zinc-100 w-72 overflow-hidden animate-in fade-in slide-in-from-left-4 duration-200">
+            <div className="bg-white rounded-2xl shadow-xl border border-zinc-100 w-72 overflow-hidden">
               <div className="flex items-center p-3 border-b border-zinc-100">
                 <Search size={16} className="text-zinc-400 ml-1" />
                 <input 
@@ -338,13 +368,6 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
                 </button>
               </div>
               <div className="max-h-60 overflow-y-auto">
-                <button 
-                  onClick={handleLocateMe}
-                  className="w-full text-left px-4 py-3 text-sm text-emerald-600 font-semibold hover:bg-emerald-50 transition-colors border-b border-zinc-50 flex items-center"
-                >
-                   <Locate size={12} className="mr-3" />
-                   Current Location
-                </button>
                 {filteredLocations.map((loc, idx) => (
                   <button 
                     key={idx}
@@ -357,11 +380,30 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
                     {loc}
                   </button>
                 ))}
+                {filteredLocations.length === 0 && (
+                  <div className="px-4 py-8 text-center">
+                    <p className="text-xs text-zinc-400 italic">No locations found</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
         </div>
       )}
+
+      {/* Add pulse animation keyframes */}
+      <style>{`
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 0.3;
+            transform: scale(1);
+          }
+          50% {
+            opacity: 0.1;
+            transform: scale(1.5);
+          }
+        }
+      `}</style>
     </div>
   );
 };
