@@ -14,7 +14,6 @@ class SupabaseService {
    */
   async setDriverOnline(driverId: string, isOnline: boolean) {
     try {
-      // console.log(`[Supabase] Setting driver ${driverId} online status: ${isOnline}`);
       const { error } = await supabaseClient
         .from('users')
         .update({ is_online: isOnline })
@@ -48,7 +47,6 @@ class SupabaseService {
         async (payload) => {
           console.log('[Supabase] 🔔 New trip request received:', payload);
           if (payload.new) {
-             // Fetch full details including rider info
              const fullTrip = await this.getTripById(payload.new.id);
              if (fullTrip) {
                callback(fullTrip);
@@ -75,7 +73,6 @@ class SupabaseService {
   subscribe(channelName: string, callback: SubscriptionCallback) {
     console.log(`[Supabase] 📡 Subscribing to ${channelName}`);
     
-    // Clean up existing channel if it exists to prevent duplicates
     if (this.channels.has(channelName)) {
       supabaseClient.removeChannel(this.channels.get(channelName)!);
       this.channels.delete(channelName);
@@ -86,15 +83,12 @@ class SupabaseService {
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
+          event: '*',
           schema: 'public',
           table: 'trips'
         },
         async (payload) => {
-          // console.log('[Supabase] 🔄 Trip update received:', payload);
-          
           if (payload.new) {
-            // Fetch full trip details to get related rider/driver info
             const trip = await this.getTripById(payload.new.id);
             if (trip) {
               callback({
@@ -124,22 +118,6 @@ class SupabaseService {
             });
           }
         }
-      )
-      .on(
-         'postgres_changes',
-         {
-           event: 'INSERT',
-           schema: 'public',
-           table: 'call_signals',
-           filter: `trip_id=eq.${channelName.replace('trip-', '')}`
-         },
-         (payload) => {
-           // We'll handle this in a separate specialized subscription usually, 
-           // but we can route it here if we filter by to_user_id in the client logic
-           // or we can rely on specific call-{tripId} channels if we prefer.
-           // For now, let's keep using the specialized signaling channel if possible,
-           // or we can multiplex here.
-         }
       )
       .subscribe((status) => {
         console.log(`[Supabase] Channel ${channelName} status:`, status);
@@ -189,7 +167,6 @@ class SupabaseService {
 
       console.log('[Supabase] ✅ Trip created:', data);
       
-      // Fetch full details to get rider info populated
       const fullTrip = await this.getTripById(data.id);
       return fullTrip || this.mapTrip(data);
     } catch (error: any) {
@@ -223,11 +200,9 @@ class SupabaseService {
 
       console.log('[Supabase] ✅ Trip accepted:', data);
       
-      // Initialize driver location and start updates
       await this.initializeDriverLocation(driverId);
       this.startLocationUpdates(driverId);
 
-      // Return full trip with driver details
       return await this.getTripById(tripId);
     } catch (error) {
       console.error('[Supabase] ❌ Accept trip error:', error);
@@ -240,18 +215,14 @@ class SupabaseService {
    */
   async updateTripStatus(tripId: string, status: TripStatus): Promise<Trip | null> {
     try {
-      // console.log('[Supabase] 🔄 Updating trip status...', { tripId, status });
-      
       const updateData: any = { status };
       
-      // Add timestamps based on status
       if (status === TripStatus.ACCEPTED) {
         updateData.accepted_at = new Date().toISOString();
       } else if (status === TripStatus.IN_PROGRESS) {
         updateData.started_at = new Date().toISOString();
       } else if (status === TripStatus.COMPLETED) {
         updateData.completed_at = new Date().toISOString();
-        // Stop location updates when trip completes
         this.stopLocationUpdates();
       }
 
@@ -267,10 +238,6 @@ class SupabaseService {
         return null;
       }
 
-      // We can just return the mapped data here, or refetch if we need updated relations (usually relations don't change on status update)
-      // But to be safe and consistent with Trip interface which might have optional rider/driver
-      // we'll rely on the subscription to push the update, or we can just return what we have if we accept partial data.
-      // Better to fetch full to avoid UI flickering "Alice" -> "User".
       return await this.getTripById(tripId);
     } catch (error) {
       console.error('[Supabase] ❌ Update trip status error:', error);
@@ -310,9 +277,6 @@ class SupabaseService {
    */
   private async initializeDriverLocation(driverId: string) {
     try {
-      // console.log('[Supabase] 📍 Initializing driver location...');
-      
-      // Start driver 0.002 degrees away (roughly 200m)
       const startLat = INITIAL_MAP_CENTER.lat - 0.002;
       const startLng = INITIAL_MAP_CENTER.lng - 0.002;
 
@@ -327,7 +291,7 @@ class SupabaseService {
         });
 
       if (error) {
-        // console.error('[Supabase] ❌ Initialize location failed:', error);
+        console.error('[Supabase] ❌ Initialize location failed:', error);
       }
     } catch (error) {
       console.error('[Supabase] ❌ Initialize driver location error:', error);
@@ -341,8 +305,6 @@ class SupabaseService {
     if (this.locationInterval) {
       clearInterval(this.locationInterval);
     }
-
-    // console.log('[Supabase] 🚗 Starting driver location updates...');
 
     let lat = INITIAL_MAP_CENTER.lat - 0.002;
     let lng = INITIAL_MAP_CENTER.lng - 0.002;
@@ -358,7 +320,7 @@ class SupabaseService {
         lat += Math.sin(rad) * speed;
         lng += Math.cos(rad) * speed;
 
-        const { error } = await supabaseClient
+        await supabaseClient
           .from('driver_locations')
           .upsert({
             driver_id: driverId,
@@ -367,19 +329,14 @@ class SupabaseService {
             bearing: heading,
             updated_at: new Date().toISOString()
           });
-
-        if (error) {
-          // ignore
-        }
       } catch (error) {
-        // ignore
+        // Ignore errors
       }
     }, 2000);
   }
 
   private stopLocationUpdates() {
     if (this.locationInterval) {
-      // console.log('[Supabase] ⏹️ Stopping location updates');
       clearInterval(this.locationInterval);
       this.locationInterval = null;
     }
@@ -402,7 +359,6 @@ class SupabaseService {
         lng: data.driver_locations.lng,
         bearing: data.driver_locations.bearing
       } : undefined,
-      // Map relations if they exist
       rider: data.rider ? {
         name: data.rider.name,
         avatarUrl: data.rider.avatar_url,
@@ -419,79 +375,10 @@ class SupabaseService {
   }
 
   /**
-   * WebRTC Signaling - Send signal
-   */
-  async send(channelName: string, event: string, payload: any, fromId: string, toId: string) {
-    if (channelName.startsWith('call-')) {
-      const tripId = channelName.replace('call-', '');
-      
-      console.log(`[Supabase] 📞 Sending signal ${event} from ${fromId} to ${toId}`);
-
-      const { error } = await supabaseClient.from('call_signals').insert({
-        trip_id: tripId,
-        signal_type: event,
-        signal_data: payload,
-        from_user_id: fromId,
-        to_user_id: toId
-      });
-
-      if (error) {
-        console.error('[Supabase] ❌ Signal send failed:', error);
-      }
-    }
-  }
-
-  /**
-   * Subscribe to signaling events
-   */
-  subscribeToSignaling(channelName: string, currentUserId: string, callback: SubscriptionCallback) {
-      // console.log(`[Supabase] 📡 Subscribing to signaling on ${channelName} for user ${currentUserId}`);
-      
-      const tripId = channelName.replace('call-', '');
-
-      // We can use a Realtime Channel or listen to postgres_changes with filter
-      // Using postgres_changes is reliable for persistent signaling, but Realtime Broadcast is faster.
-      // Since we are using the 'call_signals' table in 'send', let's listen to that table.
-
-      const channel = supabaseClient
-        .channel(`signaling-${tripId}-${currentUserId}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'call_signals',
-            filter: `trip_id=eq.${tripId}` // We filter by trip_id
-          },
-          (payload) => {
-            if (payload.new && payload.new.to_user_id === currentUserId) {
-              // Only process signals meant for me
-              callback({
-                event: payload.new.signal_type,
-                payload: payload.new.signal_data,
-                from: payload.new.from_user_id
-              });
-            }
-          }
-        )
-        .subscribe();
-
-      // Store in map to clean up later
-      this.channels.set(`signaling-${tripId}`, channel);
-      
-      return {
-        unsubscribe: () => {
-          supabaseClient.removeChannel(channel);
-          this.channels.delete(`signaling-${tripId}`);
-        }
-      };
-  }
-
-  /**
    * Cleanup all subscriptions
    */
   cleanup() {
-    // console.log('[Supabase] 🧹 Cleaning up subscriptions...');
+    console.log('[Supabase] 🧹 Cleaning up subscriptions...');
     this.channels.forEach((channel, name) => {
       supabaseClient.removeChannel(channel);
     });
