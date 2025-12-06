@@ -52,22 +52,43 @@ export class AuthService {
 
       log.success('User created', { id: authData.user.id });
 
-      try {
-        const { error: profileError } = await supabase
-          .from('users')
-          .insert({
-            id: authData.user.id,
-            email: authData.user.email!,
-            name,
-            role,
-            avatar_url: `https://i.pravatar.cc/150?u=${email}`
-          });
+      // Create profile - Retrying a few times if needed
+      let profileCreated = false;
+      let attempts = 0;
+      
+      while (!profileCreated && attempts < 3) {
+        try {
+          attempts++;
+          const { error: profileError } = await supabase
+            .from('users')
+            .insert({
+              id: authData.user.id,
+              email: authData.user.email!,
+              name,
+              role,
+              avatar_url: `https://i.pravatar.cc/150?u=${email}`
+            });
 
-        if (profileError && profileError.code !== '23505') {
-          log.warn('Profile creation warning', profileError);
+          if (profileError) {
+            if (profileError.code === '23505') {
+              // Duplicate means it was created, maybe by a trigger or previous attempt
+              profileCreated = true;
+            } else {
+              log.warn(`Profile creation attempt ${attempts} failed`, profileError);
+              await new Promise(r => setTimeout(r, 1000)); // Wait 1s before retry
+            }
+          } else {
+            profileCreated = true;
+          }
+        } catch (err) {
+           log.warn(`Profile creation exception attempt ${attempts}`, err);
+           await new Promise(r => setTimeout(r, 1000));
         }
-      } catch (err) {
-        log.warn('Profile creation exception (may be handled by trigger)', err);
+      }
+
+      if (!profileCreated) {
+        // Just log error, don't block signup completely, but it is risky
+        log.error('Failed to create user profile after 3 attempts');
       }
 
       return authData;
@@ -108,10 +129,10 @@ export class AuthService {
 
       // Verify profile exists
       setTimeout(() => {
-        this.getUserProfile(data.user.id).then(profile => {
+        this.getUserProfile(data.user!.id).then(profile => {
           if (!profile) {
             log.warn('Profile missing after login, creating...');
-            this.createUserProfile(data.user);
+            this.createUserProfile(data.user!);
           }
         });
       }, 500);
