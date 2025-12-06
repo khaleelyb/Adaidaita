@@ -1,19 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG } from '../constants';
 import { User, UserRole } from '../types';
+import { supabaseClient } from './supabaseClient'; // Reuse the same instance
 
-// Use a unique storage key that won't conflict with window.storage
-const SUPABASE_AUTH_STORAGE_KEY = 'sb-adaidaita-auth';
-
-const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storage: window.localStorage,
-    storageKey: SUPABASE_AUTH_STORAGE_KEY, // Unique key to avoid conflicts
-  }
-});
+const supabase = supabaseClient;
 
 const log = {
   info: (msg: string, data?: any) => console.log(`[Auth] ℹ️ ${msg}`, data || ''),
@@ -165,46 +155,11 @@ export class AuthService {
         log.error('Sign out failed', error);
         throw error;
       }
-
-      // Clear ONLY Supabase auth storage (not window.storage data)
-      this.clearSupabaseAuthStorage();
       
       log.success('Signed out successfully');
     } catch (error: any) {
       log.error('Sign out error', error);
-      // Even if there's an error, clear local storage
-      this.clearSupabaseAuthStorage();
       throw error;
-    }
-  }
-
-  /**
-   * Safely clears ONLY Supabase auth-related storage
-   * Does NOT touch window.storage keys or other localStorage data
-   */
-  private clearSupabaseAuthStorage() {
-    try {
-      // Clear the specific Supabase auth key we configured
-      localStorage.removeItem(SUPABASE_AUTH_STORAGE_KEY);
-      
-      // Also clear any legacy Supabase keys that might exist
-      // (in case user has old sessions from default key)
-      const keys = Object.keys(localStorage);
-      keys.forEach(key => {
-        // Only remove keys that match Supabase auth patterns
-        // IMPORTANT: Don't touch any other keys
-        if (
-          key.startsWith('sb-') && 
-          (key.includes('-auth-token') || key.includes('supabase.auth.token'))
-        ) {
-          localStorage.removeItem(key);
-          log.info('Cleared legacy Supabase key:', key);
-        }
-      });
-      
-      log.info('Supabase auth storage cleared');
-    } catch (error) {
-      log.error('Error clearing auth storage', error);
     }
   }
 
