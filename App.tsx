@@ -274,10 +274,13 @@ const App: React.FC = () => {
   };
 
   const updateTripStatus = async (status: TripStatus) => {
-    if (!currentTrip) return;
+    if (!currentTrip) {
+      console.error('Cannot update status: No active trip');
+      return;
+    }
 
+    // Handle idle status (cancelling/ending trip)
     if (status === TripStatus.IDLE) {
-      // Clean up call listener when trip ends
       if (rtcServiceRef.current) {
         rtcServiceRef.current.destroy();
         rtcServiceRef.current = null;
@@ -286,11 +289,30 @@ const App: React.FC = () => {
       return;
     }
     
+    console.log(`Updating trip status from ${currentTrip.status} to ${status}`);
+
+    // OPTIMISTIC UPDATE: Update UI immediately
+    const previousTrip = { ...currentTrip };
+    setCurrentTrip(prev => prev ? ({ ...prev, status }) : null);
+
     try {
-      await supabase.updateTripStatus(currentTrip.id, status);
-      setCurrentTrip(prev => prev ? ({ ...prev, status }) : null);
+      // Send update to server
+      const updatedTrip = await supabase.updateTripStatus(currentTrip.id, status);
+      
+      if (updatedTrip) {
+        // Sync with server response
+        setCurrentTrip(updatedTrip);
+      } else {
+        // Rollback if failed
+        console.error('Server returned null for status update, reverting...');
+        setCurrentTrip(previousTrip);
+        alert('Failed to update trip status. Please check your connection.');
+      }
     } catch (error) {
       console.error('Error updating trip status:', error);
+      // Rollback on error
+      setCurrentTrip(previousTrip);
+      alert('Failed to update trip status.');
     }
   };
 
@@ -550,7 +572,7 @@ const App: React.FC = () => {
           )}
 
           {/* Bottom Controls for Home */}
-          <div className="absolute bottom-20 left-0 right-0 z-30 p-4 md:max-w-md md:mx-auto md:bottom-28">
+          <div className="absolute bottom-20 left-0 right-0 z-40 p-4 md:max-w-md md:mx-auto md:bottom-28">
             
             {currentUser.role === UserRole.RIDER && !currentTrip && (
               <RideRequestPanel 
