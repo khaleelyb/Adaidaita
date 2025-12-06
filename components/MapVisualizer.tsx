@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { Location, UserRole } from '../types';
-import { Search, X, MapPin } from 'lucide-react';
+import { Search, X, MapPin, Navigation2 } from 'lucide-react';
 import { INITIAL_MAP_CENTER } from '../constants';
 
 // Fix for default Leaflet marker icons in React
@@ -21,6 +21,7 @@ interface MapVisualizerProps {
   role: UserRole;
   driverLocation?: Location;
   pickup?: string;
+  destination?: string;
   isSearching?: boolean;
   onLocationSelect?: (locationName: string) => void;
 }
@@ -38,12 +39,40 @@ const MOCKED_LOCATIONS: Record<string, { lat: number; lng: number }> = {
 
 const POPULAR_LOCATIONS = Object.keys(MOCKED_LOCATIONS);
 
-// Component to handle map movement when props change
-const MapUpdater: React.FC<{ center: [number, number]; zoom?: number }> = ({ center, zoom }) => {
+// Component to handle map movement and auto-fit bounds
+const MapUpdater: React.FC<{ 
+  center: [number, number]; 
+  zoom?: number;
+  pickupCoords?: [number, number];
+  destinationCoords?: [number, number];
+  driverCoords?: [number, number];
+}> = ({ center, zoom, pickupCoords, destinationCoords, driverCoords }) => {
   const map = useMap();
+  
   useEffect(() => {
-    map.flyTo(center, zoom || map.getZoom());
-  }, [center, zoom, map]);
+    // If we have multiple points, fit bounds to show them all
+    if (pickupCoords && destinationCoords) {
+      const bounds = L.latLngBounds([pickupCoords, destinationCoords]);
+      
+      // Include driver location if available
+      if (driverCoords) {
+        bounds.extend(driverCoords);
+      }
+      
+      map.fitBounds(bounds, { 
+        padding: [80, 80],
+        maxZoom: 15,
+        animate: true,
+        duration: 1
+      });
+    } else {
+      map.flyTo(center, zoom || map.getZoom(), {
+        animate: true,
+        duration: 1
+      });
+    }
+  }, [center, zoom, pickupCoords, destinationCoords, driverCoords, map]);
+  
   return null;
 };
 
@@ -63,15 +92,30 @@ const createCarIcon = (rotation: number = 0) => L.divIcon({
   iconAnchor: [20, 30]
 });
 
-// Custom Pickup Icon
-const createPickupIcon = () => L.divIcon({
+// Custom Current Location Icon (Blue Dot)
+const createCurrentLocationIcon = () => L.divIcon({
+  className: 'custom-marker-icon',
+  html: `
+    <div class="flex flex-col items-center justify-center">
+      <div class="relative">
+        <div class="w-5 h-5 bg-blue-500 rounded-full border-4 border-white shadow-lg"></div>
+        <div class="absolute inset-0 bg-blue-400 rounded-full animate-ping opacity-50"></div>
+      </div>
+    </div>
+  `,
+  iconSize: [20, 20],
+  iconAnchor: [10, 10]
+});
+
+// Custom Destination Icon (Red marker)
+const createDestinationIcon = () => L.divIcon({
   className: 'custom-marker-icon',
   html: `
     <div class="flex flex-col items-center justify-center -translate-y-6">
-      <div class="bg-white p-2 rounded-full shadow-lg border-2 border-emerald-500">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="text-emerald-600"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+      <div class="bg-white p-2 rounded-full shadow-lg border-2 border-red-500">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="text-red-600"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
       </div>
-      <div class="w-2 h-8 bg-emerald-500/50 rounded-full blur-sm -mt-2"></div>
+      <div class="w-2 h-8 bg-red-500/50 rounded-full blur-sm -mt-2"></div>
     </div>
   `,
   iconSize: [40, 40],
@@ -82,14 +126,51 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
   role, 
   driverLocation, 
   pickup,
+  destination,
   isSearching,
   onLocationSelect
 }) => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   
   // Default center
   const [mapCenter, setMapCenter] = useState<[number, number]>([INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng]);
+
+  // Get user's current location
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
+          setUserLocation(coords);
+          setMapCenter(coords);
+        },
+        (error) => {
+          console.warn('Geolocation error:', error);
+          // Fallback to default location
+          setUserLocation([INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng]);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0
+        }
+      );
+
+      // Watch position for real-time updates
+      const watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
+          setUserLocation(coords);
+        },
+        undefined,
+        { enableHighAccuracy: true }
+      );
+
+      return () => navigator.geolocation.clearWatch(watchId);
+    }
+  }, []);
 
   // Update map center when driver moves
   useEffect(() => {
@@ -114,6 +195,38 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
     loc.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Get coordinates for pickup and destination
+  const pickupCoords = pickup && MOCKED_LOCATIONS[pickup] 
+    ? [MOCKED_LOCATIONS[pickup].lat, MOCKED_LOCATIONS[pickup].lng] as [number, number]
+    : userLocation;
+    
+  const destinationCoords = destination && MOCKED_LOCATIONS[destination]
+    ? [MOCKED_LOCATIONS[destination].lat, MOCKED_LOCATIONS[destination].lng] as [number, number]
+    : null;
+
+  const driverCoords = driverLocation 
+    ? [driverLocation.lat, driverLocation.lng] as [number, number]
+    : null;
+
+  // Calculate estimated distance and time
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  const distance = pickupCoords && destinationCoords
+    ? calculateDistance(pickupCoords[0], pickupCoords[1], destinationCoords[0], destinationCoords[1])
+    : 0;
+
+  const estimatedTime = Math.round(distance * 2.5); // Rough estimate: 2.5 min per km
+
   return (
     <div className="relative w-full h-full bg-zinc-100">
       
@@ -129,7 +242,57 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         
-        <MapUpdater center={mapCenter} />
+        <MapUpdater 
+          center={mapCenter} 
+          pickupCoords={pickupCoords}
+          destinationCoords={destinationCoords}
+          driverCoords={driverCoords}
+        />
+
+        {/* Route Line */}
+        {pickupCoords && destinationCoords && (
+          <Polyline 
+            positions={[pickupCoords, destinationCoords]}
+            pathOptions={{
+              color: '#059669',
+              weight: 4,
+              opacity: 0.8,
+              dashArray: '10, 10',
+              lineCap: 'round',
+              lineJoin: 'round'
+            }}
+          />
+        )}
+
+        {/* User's Current Location (Blue Dot) */}
+        {userLocation && !driverLocation && (
+          <Marker 
+            position={userLocation} 
+            icon={createCurrentLocationIcon()}
+          >
+            <Popup className="font-semibold">Your Location</Popup>
+          </Marker>
+        )}
+
+        {/* Pickup Location Marker */}
+        {pickupCoords && pickupCoords !== userLocation && (
+          <Marker 
+            position={pickupCoords} 
+            icon={createCurrentLocationIcon()}
+          >
+            <Popup className="font-semibold">{pickup || "Pickup Location"}</Popup>
+          </Marker>
+        )}
+
+        {/* Destination Marker */}
+        {destinationCoords && (
+          <Marker 
+            position={destinationCoords} 
+            icon={createDestinationIcon()}
+          >
+            <Popup className="font-semibold">{destination}</Popup>
+          </Marker>
+        )}
 
         {/* Driver Marker */}
         {driverLocation && (
@@ -137,16 +300,7 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
             position={[driverLocation.lat, driverLocation.lng]} 
             icon={createCarIcon(driverLocation.bearing)}
           >
-          </Marker>
-        )}
-
-        {/* Pickup Marker (if static location is selected) */}
-        {!driverLocation && (
-          <Marker 
-            position={mapCenter} 
-            icon={createPickupIcon()}
-          >
-            <Popup className="font-semibold">{pickup || "Current Location"}</Popup>
+            <Popup className="font-semibold">Driver Location</Popup>
           </Marker>
         )}
       </MapContainer>
@@ -155,6 +309,26 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
       {isSearching && (
         <div className="absolute inset-0 flex items-center justify-center z-0 pointer-events-none">
           <div className="w-96 h-96 bg-emerald-500/10 rounded-full animate-ping absolute"></div>
+        </div>
+      )}
+
+      {/* Trip Info Overlay */}
+      {pickupCoords && destinationCoords && distance > 0 && (
+        <div className="absolute top-24 right-4 z-[400] bg-white rounded-xl shadow-lg p-3 border border-zinc-100 animate-in fade-in slide-in-from-right duration-300">
+          <div className="flex items-center gap-2 mb-1">
+            <Navigation2 size={16} className="text-emerald-600" />
+            <span className="text-xs font-bold text-zinc-600">ROUTE INFO</span>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-zinc-500">Distance:</span>
+              <span className="text-sm font-bold text-zinc-900">{distance.toFixed(1)} km</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-zinc-500">Est. Time:</span>
+              <span className="text-sm font-bold text-zinc-900">{estimatedTime} min</span>
+            </div>
+          </div>
         </div>
       )}
 
