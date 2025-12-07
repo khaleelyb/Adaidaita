@@ -1,5 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_CONFIG } from '../constants';
 import { User, UserRole } from '../types';
 import { supabaseClient } from './supabaseClient'; // Reuse the same instance
 
