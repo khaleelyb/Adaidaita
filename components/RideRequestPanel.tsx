@@ -1,34 +1,17 @@
-import React, { useMemo } from 'react';
-import { Loader2, Zap } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Button } from './Button';
+import { MapPin, Navigation, Clock, DollarSign, X } from 'lucide-react';
 
 interface RideRequestPanelProps {
   pickup: string;
-  setPickup: (value: string) => void;
+  setPickup: (val: string) => void;
   destination: string;
-  setDestination: (value: string) => void;
+  setDestination: (val: string) => void;
   onRequest: () => void;
   isLoading: boolean;
   error?: string;
-  
-  // Assumed props from App.tsx to enable Fix 10
-  pickupCoords?: { lat: number; lng: number };
-  destinationCoords?: { lat: number; lng: number };
+  disabled?: boolean;
 }
-
-// NOTE: This function is required for CRITICAL FIX 10 to work.
-// It must be defined or imported in this file, or globally available.
-// A simple Haversine formula implementation is assumed.
-const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
-  const R = 6371; // Radius of Earth in km
-  const dLat = (lat2 - lat1) * (Math.PI / 180);
-  const dLng = (lng2 - lng1) * (Math.PI / 180);
-  const a = 
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; // Distance in km
-};
-
 
 export const RideRequestPanel: React.FC<RideRequestPanelProps> = ({
   pickup,
@@ -38,107 +21,166 @@ export const RideRequestPanel: React.FC<RideRequestPanelProps> = ({
   onRequest,
   isLoading,
   error,
-  pickupCoords,
-  destinationCoords,
+  disabled = false
 }) => {
-  
-  // CRITICAL FIX 10: Replace random fare with distance-based calculation
-  const estimatedFare = useMemo(() => {
-    if (!pickupCoords || !destinationCoords) return 0;
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [touchStart, setTouchStart] = useState(0);
+  const [touchEnd, setTouchEnd] = useState(0);
+  const panelRef = useRef<HTMLDivElement>(null);
 
-    const distance = calculateDistance(
-      pickupCoords.lat, pickupCoords.lng,
-      destinationCoords.lat, destinationCoords.lng
-    );
+  // Swipe to expand/collapse
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStart(e.targetTouches[0].clientY);
+  };
 
-    // Calculation: 500 NGN base + 200 NGN per kilometer
-    // Ensure the result is an integer
-    return Math.floor(500 + (distance * 200)); 
-  }, [pickupCoords, destinationCoords]);
+  const handleTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientY);
+  };
 
+  const handleTouchEnd = () => {
+    if (touchStart - touchEnd > 50) {
+      // Swipe up
+      setIsExpanded(true);
+    }
+    if (touchStart - touchEnd < -50) {
+      // Swipe down
+      setIsExpanded(false);
+    }
+  };
 
-  const isReadyToRequest = !!destination;
+  // Estimate fare and time
+  const estimatedFare = destination ? Math.floor(Math.random() * 2000) + 500 : 0;
+  const estimatedTime = destination ? Math.floor(Math.random() * 10) + 5 : 0;
 
   return (
-    <div className="bg-white rounded-2xl shadow-xl p-6 border border-zinc-100">
-      <h2 className="text-2xl font-bold text-zinc-900 mb-5">Where to?</h2>
-
-      <div className="space-y-4 mb-6">
-        {/* Pickup Input */}
-        <div className="flex items-center space-x-3 bg-zinc-50 p-3 rounded-xl border border-zinc-100">
-          <div className="w-2 h-2 rounded-full bg-emerald-600"></div>
-          <input
-            type="text"
-            placeholder="Pickup Location"
-            value={pickup}
-            onChange={(e) => setPickup(e.target.value)}
-            onFocus={() => {
-              // Set focus behavior: Allow changing pickup if not 'Current Location'
-              if (pickup === 'Current Location') {
-                setPickup('');
-              }
-            }}
-            onBlur={() => {
-              // Restore 'Current Location' if field is left empty
-              if (pickup.trim() === '') {
-                setPickup('Current Location');
-              }
-            }}
-            className="flex-1 bg-transparent text-zinc-800 focus:outline-none focus:ring-0 p-0 text-base"
-            readOnly={pickup === 'Current Location'} // Optionally prevent editing the 'Current Location' label
-          />
-        </div>
-
-        {/* Destination Input */}
-        <div className="flex items-center space-x-3 bg-zinc-50 p-3 rounded-xl border border-zinc-100">
-          <div className="w-2 h-2 rounded-full bg-red-500"></div>
-          <input
-            type="text"
-            placeholder="Enter Destination"
-            value={destination}
-            onChange={(e) => setDestination(e.target.value)}
-            className="flex-1 bg-transparent text-zinc-800 focus:outline-none focus:ring-0 p-0 text-base"
-          />
-        </div>
+    <div 
+      ref={panelRef}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      className={`bg-white rounded-t-3xl shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-all duration-300 ${
+        isExpanded ? 'p-6 pb-8' : 'p-6'
+      } space-y-4 animate-in slide-in-from-bottom`}
+    >
+      {/* Drag Handle */}
+      <div className="flex justify-center">
+        <div className="w-12 h-1.5 bg-zinc-200 rounded-full cursor-grab active:cursor-grabbing" />
       </div>
       
-      {/* Estimated Fare Display */}
-      <div className={`flex justify-between items-center px-4 py-3 rounded-xl mb-6 transition-all duration-300 ${
-        estimatedFare > 0 ? 'bg-emerald-50 border border-emerald-200' : 'bg-zinc-50 border border-zinc-100'
-      }`}>
-        <div className="flex items-center space-x-2">
-          <Zap size={20} className="text-emerald-600" />
-          <p className="text-sm font-semibold text-zinc-700">Estimated Fare</p>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold text-zinc-800">Where to?</h2>
+          {destination && !isExpanded && (
+            <button 
+              onClick={() => setIsExpanded(true)}
+              className="text-emerald-600 text-sm font-semibold"
+            >
+              View Details
+            </button>
+          )}
         </div>
-        <p className="text-xl font-bold text-emerald-800">
-          {estimatedFare > 0 ? `${estimatedFare.toLocaleString()} NGN` : '--'}
-        </p>
+        
+        {/* Inputs Container */}
+        <div className="relative">
+          {/* Connector Line */}
+          <div className="absolute left-6 top-8 bottom-8 w-0.5 bg-gradient-to-b from-emerald-500 via-zinc-200 to-zinc-900 z-0" />
+
+          {/* Pickup Input */}
+          <div className="group flex items-center bg-zinc-50 p-4 rounded-2xl border-2 border-zinc-200 focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-500 transition-all mb-3 relative z-10">
+            <div className="w-10 h-10 flex items-center justify-center bg-white rounded-xl shadow-sm border border-zinc-100 mr-3 text-emerald-600 flex-shrink-0">
+              <div className="w-3 h-3 bg-emerald-500 rounded-full ring-4 ring-emerald-100" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block mb-0.5">Pickup</label>
+              <input 
+                value={pickup}
+                onChange={(e) => setPickup(e.target.value)}
+                className="bg-transparent w-full outline-none text-zinc-800 font-semibold placeholder-zinc-300 text-sm"
+                placeholder="Current Location"
+                disabled={disabled}
+              />
+            </div>
+            {pickup && pickup !== 'Central Market' && (
+              <button 
+                onClick={() => setPickup('Central Market')}
+                className="ml-2 p-1 hover:bg-zinc-200 rounded-full transition-colors flex-shrink-0"
+              >
+                <X size={16} className="text-zinc-400" />
+              </button>
+            )}
+          </div>
+
+          {/* Destination Input */}
+          <div className="group flex items-center bg-zinc-50 p-4 rounded-2xl border-2 border-zinc-200 focus-within:ring-2 focus-within:ring-zinc-500/20 focus-within:border-zinc-500 transition-all relative z-10">
+            <div className="w-10 h-10 flex items-center justify-center bg-white rounded-xl shadow-sm border border-zinc-100 mr-3 text-zinc-800 flex-shrink-0">
+              <div className="w-3 h-3 bg-zinc-900 rounded-sm ring-4 ring-zinc-200" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block mb-0.5">Drop-off</label>
+              <input 
+                value={destination}
+                onChange={(e) => setDestination(e.target.value)}
+                className="bg-transparent w-full outline-none text-zinc-800 font-semibold placeholder-zinc-300 text-sm"
+                placeholder="Where are you going?"
+                disabled={disabled}
+              />
+            </div>
+            {destination && (
+              <button 
+                onClick={() => setDestination('')}
+                className="ml-2 p-1 hover:bg-zinc-200 rounded-full transition-colors flex-shrink-0"
+              >
+                <X size={16} className="text-zinc-400" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Trip Details (Expanded View) */}
+        {isExpanded && destination && (
+          <div className="grid grid-cols-2 gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-100">
+              <div className="flex items-center text-emerald-700 mb-1">
+                <DollarSign size={14} />
+                <span className="text-xs font-semibold ml-1">Est. Fare</span>
+              </div>
+              <p className="text-lg font-bold text-emerald-900">₦{estimatedFare}</p>
+            </div>
+            <div className="bg-blue-50 rounded-xl p-3 border border-blue-100">
+              <div className="flex items-center text-blue-700 mb-1">
+                <Clock size={14} />
+                <span className="text-xs font-semibold ml-1">Est. Time</span>
+              </div>
+              <p className="text-lg font-bold text-blue-900">{estimatedTime} min</p>
+            </div>
+          </div>
+        )}
+
+        {/* Error Message */}
+        {error && (
+          <div className="text-red-500 text-sm bg-red-50 p-3 rounded-xl border border-red-100 flex items-start animate-in fade-in slide-in-from-top-1 duration-200">
+            <span className="mr-2">⚠️</span>
+            <span>{error}</span>
+          </div>
+        )}
       </div>
 
       {/* Request Button */}
-      <button
-        onClick={onRequest}
-        disabled={isLoading || !isReadyToRequest || estimatedFare === 0}
-        className={`w-full py-4 rounded-xl font-bold text-lg transition-all shadow-lg ${
-          isLoading || !isReadyToRequest || estimatedFare === 0
-            ? 'bg-zinc-300 text-zinc-600 cursor-not-allowed'
-            : 'bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.98]'
-        }`}
-      >
-        {isLoading ? (
-          <div className="flex items-center justify-center">
-            <Loader2 size={24} className="animate-spin mr-2" />
-            Requesting Ride...
-          </div>
-        ) : (
-          'Request Ride Now'
+      <div className="pt-2">
+        <Button 
+          onClick={onRequest} 
+          isLoading={isLoading} 
+          fullWidth 
+          className="h-14 text-lg shadow-emerald-500/25"
+          disabled={disabled || !destination.trim()}
+          icon={<Navigation size={20} />}
+        >
+          {isLoading ? 'Finding Driver...' : 'Request Ride'}
+        </Button>
+        {!destination.trim() && (
+          <p className="text-xs text-zinc-400 text-center mt-2">Enter a destination to continue</p>
         )}
-      </button>
-
-      {/* Error Message */}
-      {error && (
-        <p className="mt-4 text-sm text-red-600 text-center">{error}</p>
-      )}
+      </div>
     </div>
   );
 };
