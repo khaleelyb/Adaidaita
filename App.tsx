@@ -33,6 +33,7 @@ const App: React.FC = () => {
   const [destinationCoords, setDestinationCoords] = useState<{lat: number, lng: number} | undefined>(undefined);
 
   const [isRequesting, setIsRequesting] = useState(false);
+  const [isAcceptingTrip, setIsAcceptingTrip] = useState(false); // FIX 13: Added state for trip acceptance loading
   const [requestError, setRequestError] = useState<string | undefined>(undefined);
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
@@ -59,12 +60,14 @@ const App: React.FC = () => {
       try {
         console.log('🔍 Starting auth initialization...');
         
+        // FIX 9: Longer timeout and explicit error handling
         const timeoutId = setTimeout(() => {
           if (isMounted.current && isAuthLoading) {
-            console.warn('⚠️ Auth check timeout - forcing completion');
+            console.warn('⚠️ Auth check timeout');
             setIsAuthLoading(false);
+            setAuthError('Connection timeout. Please check your internet.'); // FIX 9: Set error state
           }
-        }, 5000);
+        }, 10000); // FIX 9: Increased timeout to 10s
 
         const user = await authService.getCurrentUser();
         
@@ -188,7 +191,7 @@ const App: React.FC = () => {
         clearInterval(poller);
       }
     };
-  }, [currentTrip?.id, currentTrip?.status, currentTrip?.driverId]);
+  }, [currentTrip?.id, currentTrip?.status]); // FIX 1: Removed currentTrip?.driverId
 
   // --- Setup WebRTC Listener when trip becomes active ---
   useEffect(() => {
@@ -243,10 +246,13 @@ const App: React.FC = () => {
         rtc.destroy();
       }
     };
-  }, [currentUser?.id, currentTrip?.id, currentTrip?.status, currentTrip?.driverId, currentTrip?.riderId]);
+  }, [currentUser?.id, currentTrip?.id, currentTrip?.status]); // FIX 2: Removed currentTrip?.driverId and currentTrip?.riderId
 
   // --- Driver Online Status & Trip Subscription ---
   useEffect(() => {
+    // FIX 3: Calculate derived state to prevent over-re-subscription
+    const hasTrip = !!currentTrip; 
+
     if (!currentUser || currentUser.role !== UserRole.DRIVER) {
       // Cleanup driver subscription if not a driver
       if (driverSubscriptionRef.current) {
@@ -298,7 +304,7 @@ const App: React.FC = () => {
         supabase.setDriverOnline(currentUser.id, false).catch(console.error);
       }
     };
-  }, [currentUser?.id, currentUser?.role, currentTrip]);
+  }, [currentUser?.id, currentUser?.role, hasTrip]); // FIX 3: Changed currentTrip to hasTrip
 
   // --- Real Driver Location Tracking (GPS) ---
   useEffect(() => {
@@ -398,6 +404,7 @@ const App: React.FC = () => {
 
   // --- Trip Handlers ---
   const requestTrip = async () => {
+    setRequestError(undefined); // FIX 11: Reset error state at the start
     if (!currentUser) return;
     
     if (!pickupInput || !destinationInput) {
@@ -406,7 +413,7 @@ const App: React.FC = () => {
     }
 
     setIsRequesting(true);
-    setRequestError(undefined);
+    // setRequestError(undefined); // Removed redundant reset
     
     try {
       console.log('[App] 🚗 Requesting trip...');
@@ -432,6 +439,7 @@ const App: React.FC = () => {
   const acceptTrip = async () => {
     if (!availableTrip || !currentUser) return;
 
+    setIsAcceptingTrip(true); // FIX 13: Start loading state
     console.log('[App] 🤝 Accepting trip:', availableTrip.id);
 
     // Optimistically hide the available trip immediately
@@ -451,6 +459,8 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('[App] ❌ Accept trip error:', error);
       alert('Failed to accept trip. Please try again.');
+    } finally {
+      setIsAcceptingTrip(false); // FIX 13: End loading state
     }
   };
 
@@ -752,9 +762,14 @@ const App: React.FC = () => {
                   </button>
                   <button 
                     onClick={acceptTrip}
-                    className="flex-1 px-4 py-3 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-lg"
+                    disabled={isAcceptingTrip} // FIX 13: Disable when loading
+                    className={`flex-1 px-4 py-3 font-semibold rounded-xl transition-colors shadow-lg ${
+                      isAcceptingTrip 
+                        ? 'bg-emerald-400 text-white cursor-not-allowed'
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    }`} // FIX 13: Added dynamic styling for loading state
                   >
-                    Accept
+                    {isAcceptingTrip ? 'Accepting...' : 'Accept'} {/* FIX 13: Show loading text */}
                   </button>
                 </div>
               </div>
