@@ -139,6 +139,9 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
   const [localPickupCoords, setLocalPickupCoords] = useState<[number, number] | null>(null);
   const [localDestCoords, setLocalDestCoords] = useState<[number, number] | null>(null);
 
+  // Auto-geocoded coordinates for display fallback
+  const [geocodedDest, setGeocodedDest] = useState<[number, number] | null>(null);
+
   // Get user's current location
   useEffect(() => {
     if (navigator.geolocation) {
@@ -152,10 +155,6 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
           // If no pickup is set, default pickup to user location
           if (!pickup && !propPickupCoords) {
              if (onLocationSelect) {
-               // We don't have a name, but we have coords. 
-               // Ideally we reverse geocode here, but for now we just use "Current Location"
-               // We actually can't easily reverse geocode without an API key sometimes or hitting limits.
-               // Let's just set the coords locally.
                setLocalPickupCoords(coords);
              }
           }
@@ -214,6 +213,43 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  // Handle Auto-Geocoding for Destination String (for Driver view)
+  useEffect(() => {
+    // Only geocode if:
+    // 1. We have a destination string
+    // 2. We DO NOT have explicit coords (prop or local)
+    // 3. We haven't already geocoded it (prevent loops/spam)
+    // 4. Destination string is long enough
+    if (
+      destination && 
+      destination.length > 3 &&
+      !propDestinationCoords && 
+      !localDestCoords &&
+      !geocodedDest
+    ) {
+      console.log('Attempting to auto-geocode destination:', destination);
+      const timer = setTimeout(async () => {
+        try {
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destination)}&countrycodes=ng&limit=1`
+          );
+          const data = await response.json();
+          if (data && data.length > 0) {
+            const lat = parseFloat(data[0].lat);
+            const lng = parseFloat(data[0].lon);
+            console.log('Auto-geocoded destination:', { lat, lng });
+            setGeocodedDest([lat, lng]);
+          }
+        } catch (error) {
+          console.error("Auto-geocode error:", error);
+        }
+      }, 1000); // 1s delay to be nice to API
+
+      return () => clearTimeout(timer);
+    }
+  }, [destination, propDestinationCoords, localDestCoords, geocodedDest]);
+
+
   const handleSearchSelect = (result: SearchResult) => {
     const lat = parseFloat(result.lat);
     const lng = parseFloat(result.lon);
@@ -225,6 +261,9 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
     setMapCenter([lat, lng]);
     setSearchQuery("");
     setIsSearchOpen(false);
+    
+    // Also update localDestCoords if we are setting destination via search
+    setLocalDestCoords([lat, lng]);
   };
 
   // Determine effective coordinates
@@ -235,7 +274,7 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
 
   const effectiveDestCoords: [number, number] | null = propDestinationCoords
     ? [propDestinationCoords.lat, propDestinationCoords.lng]
-    : localDestCoords;
+    : (localDestCoords || geocodedDest);
 
   const driverCoords: [number, number] | null = driverLocation 
     ? [driverLocation.lat, driverLocation.lng]
