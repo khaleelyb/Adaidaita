@@ -51,11 +51,42 @@ class SupabaseService {
 
   /**
    * Subscribe to available trips (for Drivers)
+   * Handles both fetching existing pending trips AND listening for new ones.
    */
   subscribeToAvailableTrips(callback: (trip: Trip) => void) {
     console.log('[Supabase] 📡 Subscribing to available trips...');
     const channelName = 'available-trips';
 
+    // 1. Fetch existing trips first (in case driver came online after request)
+    const fetchExisting = async () => {
+      try {
+        const { data, error } = await supabaseClient
+          .from('trips')
+          .select('*')
+          .eq('status', TripStatus.SEARCHING)
+          .order('created_at', { ascending: false }) // Get latest first
+          .limit(1);
+
+        if (error) {
+          console.error('[Supabase] ❌ Failed to fetch existing trips:', error);
+          return;
+        }
+
+        if (data && data.length > 0) {
+          console.log('[Supabase] 📥 Found existing pending trip:', data[0]);
+          const fullTrip = await this.getTripById(data[0].id);
+          if (fullTrip) {
+            callback(fullTrip);
+          }
+        }
+      } catch (err) {
+        console.error('[Supabase] ❌ Error fetching existing trips:', err);
+      }
+    };
+
+    fetchExisting();
+
+    // 2. Subscribe to new INSERTs
     const channel = supabaseClient
       .channel(channelName)
       .on(
@@ -178,9 +209,7 @@ class SupabaseService {
           fare,
           pickup_lat: pickupCoords?.lat || INITIAL_MAP_CENTER.lat,
           pickup_lng: pickupCoords?.lng || INITIAL_MAP_CENTER.lng,
-          // Removed destination lat/lng columns as they don't exist in the schema yet
-          // dest_lat: destinationCoords?.lat || null,
-          // dest_lng: destinationCoords?.lng || null
+          // destination coords are excluded until schema is updated
         })
         .select()
         .single();
