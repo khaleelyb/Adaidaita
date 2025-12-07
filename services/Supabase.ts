@@ -1,13 +1,12 @@
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabaseClient } from './supabaseClient';
 import { INITIAL_MAP_CENTER } from '../constants';
-import { Trip, TripStatus } from '../types';
+import { Trip, TripStatus, Location } from '../types';
 
 type SubscriptionCallback = (payload: any) => void;
 
 class SupabaseService {
   private channels: Map<string, RealtimeChannel> = new Map();
-  private locationInterval: any = null;
 
   /**
    * Set driver online status
@@ -24,6 +23,29 @@ class SupabaseService {
       }
     } catch (error) {
       console.error('[Supabase] ❌ Error updating driver online status:', error);
+    }
+  }
+
+  /**
+   * Update Driver Location (Real from GPS)
+   */
+  async updateDriverLocation(driverId: string, location: { lat: number, lng: number, bearing: number }) {
+    try {
+      const { error } = await supabaseClient
+        .from('driver_locations')
+        .upsert({
+          driver_id: driverId,
+          lat: location.lat,
+          lng: location.lng,
+          bearing: location.bearing,
+          updated_at: new Date().toISOString()
+        });
+        
+      if (error) {
+        console.error('[Supabase] ❌ Failed to update driver location:', error);
+      }
+    } catch (error) {
+      console.error('[Supabase] ❌ Error updating driver location:', error);
     }
   }
 
@@ -140,11 +162,11 @@ class SupabaseService {
   /**
    * Create a new trip request
    */
-  async createTrip(riderId: string, pickup: string, destination: string): Promise<Trip> {
+  async createTrip(riderId: string, pickup: string, destination: string, pickupCoords?: Location, destinationCoords?: Location): Promise<Trip> {
     try {
       console.log('[Supabase] 🚗 Creating trip...', { riderId, pickup, destination });
       
-      const fare = Math.floor(Math.random() * 2000) + 500;
+      const fare = Math.floor(Math.random() * 2000) + 500; // Still simplified fare calc
       
       const { data, error } = await supabaseClient
         .from('trips')
@@ -154,8 +176,10 @@ class SupabaseService {
           destination_location: destination,
           status: TripStatus.SEARCHING,
           fare,
-          pickup_lat: INITIAL_MAP_CENTER.lat,
-          pickup_lng: INITIAL_MAP_CENTER.lng
+          pickup_lat: pickupCoords?.lat || INITIAL_MAP_CENTER.lat,
+          pickup_lng: pickupCoords?.lng || INITIAL_MAP_CENTER.lng,
+          dest_lat: destinationCoords?.lat || null,
+          dest_lng: destinationCoords?.lng || null
         })
         .select()
         .single();
@@ -200,8 +224,8 @@ class SupabaseService {
 
       console.log('[Supabase] ✅ Trip accepted:', data);
       
+      // Initialize driver location in DB to start tracking
       await this.initializeDriverLocation(driverId);
-      this.startLocationUpdates(driverId);
 
       return await this.getTripById(tripId);
     } catch (error) {
@@ -223,7 +247,6 @@ class SupabaseService {
         updateData.started_at = new Date().toISOString();
       } else if (status === TripStatus.COMPLETED) {
         updateData.completed_at = new Date().toISOString();
-        this.stopLocationUpdates();
       }
 
       const { data, error } = await supabaseClient
@@ -273,20 +296,19 @@ class SupabaseService {
   }
 
   /**
-   * Initialize driver location (near pickup point)
+   * Initialize driver location
    */
   private async initializeDriverLocation(driverId: string) {
     try {
-      const startLat = INITIAL_MAP_CENTER.lat - 0.002;
-      const startLng = INITIAL_MAP_CENTER.lng - 0.002;
-
+      // Initialize with a default or current location if available
+      // In a real app, the client would have already updated the location
       const { error } = await supabaseClient
         .from('driver_locations')
         .upsert({
           driver_id: driverId,
-          lat: startLat,
-          lng: startLng,
-          bearing: 45,
+          lat: INITIAL_MAP_CENTER.lat, 
+          lng: INITIAL_MAP_CENTER.lng,
+          bearing: 0,
           updated_at: new Date().toISOString()
         });
 
@@ -295,50 +317,6 @@ class SupabaseService {
       }
     } catch (error) {
       console.error('[Supabase] ❌ Initialize driver location error:', error);
-    }
-  }
-
-  /**
-   * Start simulating driver movement towards pickup
-   */
-  private startLocationUpdates(driverId: string) {
-    if (this.locationInterval) {
-      clearInterval(this.locationInterval);
-    }
-
-    let lat = INITIAL_MAP_CENTER.lat - 0.002;
-    let lng = INITIAL_MAP_CENTER.lng - 0.002;
-    let heading = 45;
-
-    this.locationInterval = setInterval(async () => {
-      try {
-        const speed = 0.00015;
-        const steering = (Math.random() - 0.5) * 15;
-        heading = (heading + steering + 360) % 360;
-
-        const rad = (90 - heading) * (Math.PI / 180);
-        lat += Math.sin(rad) * speed;
-        lng += Math.cos(rad) * speed;
-
-        await supabaseClient
-          .from('driver_locations')
-          .upsert({
-            driver_id: driverId,
-            lat: lat,
-            lng: lng,
-            bearing: heading,
-            updated_at: new Date().toISOString()
-          });
-      } catch (error) {
-        // Ignore errors
-      }
-    }, 2000);
-  }
-
-  private stopLocationUpdates() {
-    if (this.locationInterval) {
-      clearInterval(this.locationInterval);
-      this.locationInterval = null;
     }
   }
 
@@ -383,7 +361,6 @@ class SupabaseService {
       supabaseClient.removeChannel(channel);
     });
     this.channels.clear();
-    this.stopLocationUpdates();
   }
 }
 
