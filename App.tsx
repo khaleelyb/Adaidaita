@@ -235,10 +235,13 @@ const App: React.FC = () => {
       try {
         await supabase.setDriverOnline(currentUser.id, true);
 
+        // Fetch ANY existing pending trips first, then listen for new ones
         subscription = supabase.subscribeToAvailableTrips((trip) => {
           console.log('📡 New trip available:', trip);
+          
           // Only show available trip if we aren't currently in one
-          if (!currentTrip) {
+          // AND if the trip is actually still searching (double check)
+          if (!currentTrip && trip.status === TripStatus.SEARCHING) {
             setAvailableTrip(trip);
           }
         });
