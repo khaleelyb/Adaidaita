@@ -12,7 +12,6 @@ import { AuthModal } from './components/AuthModal';
 import { BottomNav } from './components/BottomNav';
 import { Account } from './pages/Account';
 import { Services } from './pages/Services';
-import { Car, MapPin, Navigation, Phone } from 'lucide-react';
 
 const App: React.FC = () => {
   // Global State
@@ -49,6 +48,8 @@ const App: React.FC = () => {
   const authSubscriptionRef = useRef<any>(null);
   const lastLocalUpdateRef = useRef<number>(0);
   const watchIdRef = useRef<number | null>(null);
+  const tripSubscriptionRef = useRef<any>(null);
+  const driverSubscriptionRef = useRef<any>(null);
 
   // --- Auth Handlers ---
   useEffect(() => {
@@ -98,18 +99,7 @@ const App: React.FC = () => {
       
       if (!user) {
         // Clean up everything on logout
-        setCurrentTrip(null);
-        setAvailableTrip(null);
-        setIsCallModalOpen(false);
-        setHasIncomingCall(false);
-        setLocalStream(null);
-        setRemoteStream(null);
-        setCurrentTab('home');
-        
-        if (rtcServiceRef.current) {
-          rtcServiceRef.current.destroy();
-          rtcServiceRef.current = null;
-        }
+        cleanupAllConnections();
       }
     });
 
@@ -121,37 +111,53 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // --- 1. TRIP MANAGEMENT (Realtime + Polling) ---
+  // --- 1. TRIP MANAGEMENT (Realtime + Polling Backup) ---
   useEffect(() => {
-    if (!currentTrip) return;
+    if (!currentTrip) {
+      // Cleanup subscription if no trip
+      if (tripSubscriptionRef.current) {
+        console.log('[App] 🔌 Cleaning up trip subscription (no trip)');
+        tripSubscriptionRef.current.unsubscribe();
+        tripSubscriptionRef.current = null;
+      }
+      return;
+    }
 
-    // A. Realtime Subscription
-    console.log('[App] 📡 Subscribing to trip updates:', currentTrip.id);
-    const subscription = supabase.subscribe(`trip-${currentTrip.id}`, (data) => {
+    console.log('[App] 📡 Setting up trip subscription:', currentTrip.id);
+
+    // Subscribe to realtime updates
+    tripSubscriptionRef.current = supabase.subscribe(`trip-${currentTrip.id}`, (data) => {
+      if (!isMounted.current) return;
+
       if (data.event === 'trip_updated') {
         const newTrip = data.payload.trip;
         
-        // Prevent older updates from overwriting optimistic local updates
+        // Prevent stale updates from overwriting recent local changes
         const timeSinceLocalUpdate = Date.now() - lastLocalUpdateRef.current;
         if (timeSinceLocalUpdate < 2000 && newTrip.status !== currentTrip.status) {
-          console.log('[App] ⏳ Ignoring realtime update due to recent local action');
+          console.log('[App] ⏳ Ignoring potentially stale realtime update');
           return;
         }
 
-        console.log('[App] 🔄 Realtime update:', newTrip.status);
+        console.log('[App] 🔄 Realtime trip update:', newTrip.status);
         setCurrentTrip(newTrip);
+
+        // If trip was cancelled remotely, clear it
+        if (newTrip.status === TripStatus.IDLE) {
+          setCurrentTrip(null);
+        }
       } else if (data.event === 'location_update') {
         setCurrentTrip(prev => prev ? ({ ...prev, driverLocation: data.payload }) : null);
       }
     });
 
-    // B. Polling Fallback 
+    // Polling fallback for SEARCHING status (most critical phase)
     const shouldPoll = currentTrip.status === TripStatus.SEARCHING;
-    
     let poller: NodeJS.Timeout | null = null;
     
     if (shouldPoll) {
-       poller = setInterval(async () => {
+      console.log('[App] 🔄 Starting polling fallback for SEARCHING status');
+      poller = setInterval(async () => {
         if (!isMounted.current) return;
         
         // Don't poll if we just updated locally
@@ -162,39 +168,55 @@ const App: React.FC = () => {
           if (freshTrip) {
             // Only update if critical fields changed
             if (freshTrip.status !== currentTrip.status || freshTrip.driverId !== currentTrip.driverId) {
-              console.log('[App] 📥 Polling sync mismatch found. Updating...');
+              console.log('[App] 📥 Polling detected change:', freshTrip.status);
               setCurrentTrip(freshTrip);
             }
           }
         } catch (err) {
-          console.warn('[App] Polling failed', err);
+          console.warn('[App] ⚠️ Polling failed:', err);
         }
       }, 3000);
     }
 
     return () => {
-      console.log('[App] 🔌 Unsubscribing trip updates');
-      subscription.unsubscribe();
-      if (poller) clearInterval(poller);
+      console.log('[App] 🧹 Cleaning up trip subscription');
+      if (tripSubscriptionRef.current) {
+        tripSubscriptionRef.current.unsubscribe();
+        tripSubscriptionRef.current = null;
+      }
+      if (poller) {
+        clearInterval(poller);
+      }
     };
   }, [currentTrip?.id, currentTrip?.status, currentTrip?.driverId]);
 
   // --- Setup WebRTC Listener when trip becomes active ---
   useEffect(() => {
-    if (!currentUser || !currentTrip) return;
+    if (!currentUser || !currentTrip) {
+      // Cleanup if no trip
+      if (rtcServiceRef.current) {
+        console.log('[App] 🧹 Cleaning up WebRTC (no trip)');
+        rtcServiceRef.current.destroy();
+        rtcServiceRef.current = null;
+      }
+      return;
+    }
     
     // Only setup listener for accepted trips or later
-    if (currentTrip.status === TripStatus.SEARCHING) return;
+    if (currentTrip.status === TripStatus.SEARCHING) {
+      return;
+    }
 
     const targetUserId = currentUser.role === UserRole.RIDER 
       ? currentTrip.driverId 
       : currentTrip.riderId;
 
     if (!targetUserId) {
+      console.warn('[App] ⚠️ No target user for WebRTC');
       return;
     }
 
-    console.log('[App] 🎧 Setting up call listener for trip:', currentTrip.id);
+    console.log('[App] 🎧 Setting up WebRTC listener for trip:', currentTrip.id);
 
     const rtc = new WebRTCService(
       currentTrip.id,
@@ -216,55 +238,71 @@ const App: React.FC = () => {
     rtcServiceRef.current = rtc;
 
     return () => {
-      console.log('[App] 🧹 Cleaning up call listener');
+      console.log('[App] 🧹 Cleaning up WebRTC listener');
       if (rtc) {
         rtc.destroy();
       }
     };
-  }, [currentUser?.id, currentTrip?.id, currentTrip?.status]);
+  }, [currentUser?.id, currentTrip?.id, currentTrip?.status, currentTrip?.driverId, currentTrip?.riderId]);
 
   // --- Driver Online Status & Trip Subscription ---
   useEffect(() => {
-    if (!currentUser || currentUser.role !== UserRole.DRIVER) return;
+    if (!currentUser || currentUser.role !== UserRole.DRIVER) {
+      // Cleanup driver subscription if not a driver
+      if (driverSubscriptionRef.current) {
+        console.log('[App] 🧹 Cleaning up driver subscription (not driver)');
+        driverSubscriptionRef.current.unsubscribe();
+        driverSubscriptionRef.current = null;
+      }
+      return;
+    }
 
     console.log('🚕 Setting up driver mode...');
     
-    let subscription: { unsubscribe: () => void } | null = null;
-
     const setupDriver = async () => {
       try {
+        // Mark driver as online
         await supabase.setDriverOnline(currentUser.id, true);
+        console.log('[App] ✅ Driver marked as online');
 
-        // Fetch ANY existing pending trips first, then listen for new ones
-        subscription = supabase.subscribeToAvailableTrips((trip) => {
-          console.log('📡 New trip available:', trip);
+        // Subscribe to available trips
+        driverSubscriptionRef.current = supabase.subscribeToAvailableTrips((trip) => {
+          if (!isMounted.current) return;
           
-          // Only show available trip if we aren't currently in one
-          // AND if the trip is actually still searching (double check)
-          if (!currentTrip && trip.status === TripStatus.SEARCHING) {
+          console.log('[App] 📡 New trip notification:', trip.id);
+          
+          // Only show if we aren't in a trip AND trip is actually still searching
+          if (!currentTrip && trip.status === TripStatus.SEARCHING && !trip.driverId) {
+            console.log('[App] ✅ Showing trip to driver');
             setAvailableTrip(trip);
+          } else {
+            console.log('[App] ℹ️ Ignoring trip (already in trip or trip taken)');
           }
         });
+
+        console.log('[App] ✅ Driver subscription active');
       } catch (error) {
-        console.error('Error setting up driver:', error);
+        console.error('[App] ❌ Error setting up driver:', error);
       }
     };
 
     setupDriver();
 
     return () => {
-      if (subscription) {
-        subscription.unsubscribe();
+      console.log('[App] 🧹 Cleaning up driver mode');
+      if (driverSubscriptionRef.current) {
+        driverSubscriptionRef.current.unsubscribe();
+        driverSubscriptionRef.current = null;
       }
-      supabase.setDriverOnline(currentUser.id, false).catch(console.error);
+      if (currentUser) {
+        supabase.setDriverOnline(currentUser.id, false).catch(console.error);
+      }
     };
   }, [currentUser?.id, currentUser?.role, currentTrip]);
 
   // --- Real Driver Location Tracking (GPS) ---
   useEffect(() => {
-    // Only track if:
-    // 1. User is a driver
-    // 2. User is currently in an active trip (Accepted, In Progress)
+    // Only track if driver in active trip
     if (
       !currentUser || 
       currentUser.role !== UserRole.DRIVER || 
@@ -274,26 +312,30 @@ const App: React.FC = () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
+        console.log('[GPS] ❌ Stopped tracking (conditions not met)');
       }
       return;
     }
 
-    console.log('[GPS] Starting location tracking...');
+    console.log('[GPS] ✅ Starting location tracking...');
 
     if (navigator.geolocation) {
       watchIdRef.current = navigator.geolocation.watchPosition(
         async (position) => {
           const { latitude, longitude, heading } = position.coords;
           
-          // Update DB
-          await supabase.updateDriverLocation(currentUser.id, {
-            lat: latitude,
-            lng: longitude,
-            bearing: heading || 0
-          });
+          try {
+            await supabase.updateDriverLocation(currentUser.id, {
+              lat: latitude,
+              lng: longitude,
+              bearing: heading || 0
+            });
+          } catch (error) {
+            console.error('[GPS] ❌ Error updating location:', error);
+          }
         },
         (error) => {
-          console.error('[GPS] Error tracking location:', error);
+          console.error('[GPS] ❌ Geolocation error:', error);
         },
         {
           enableHighAccuracy: true,
@@ -301,43 +343,56 @@ const App: React.FC = () => {
           timeout: 5000
         }
       );
+    } else {
+      console.error('[GPS] ❌ Geolocation not supported');
     }
 
     return () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
+        console.log('[GPS] 🔌 Stopped tracking');
       }
     };
   }, [currentUser, currentTrip]);
 
+  // --- Helper: Cleanup all connections ---
+  const cleanupAllConnections = () => {
+    console.log('[App] 🧹 Cleaning up all connections...');
+    
+    setCurrentUser(null);
+    setCurrentTrip(null);
+    setAvailableTrip(null);
+    setIsCallModalOpen(false);
+    setHasIncomingCall(false);
+    setLocalStream(null);
+    setRemoteStream(null);
+    setCurrentTab('home');
+    
+    if (rtcServiceRef.current) {
+      rtcServiceRef.current.destroy();
+      rtcServiceRef.current = null;
+    }
+    
+    if (tripSubscriptionRef.current) {
+      tripSubscriptionRef.current.unsubscribe();
+      tripSubscriptionRef.current = null;
+    }
+    
+    if (driverSubscriptionRef.current) {
+      driverSubscriptionRef.current.unsubscribe();
+      driverSubscriptionRef.current = null;
+    }
+  };
 
   const logout = async () => {
     try {
       console.log('👋 Logging out...');
-      
-      // Clean up WebRTC
-      if (rtcServiceRef.current) {
-        rtcServiceRef.current.destroy();
-        rtcServiceRef.current = null;
-      }
-      
-      // Clear state
-      setCurrentUser(null);
-      setCurrentTrip(null);
-      setAvailableTrip(null);
-      setIsCallModalOpen(false);
-      setHasIncomingCall(false);
-      setLocalStream(null);
-      setRemoteStream(null);
-      setCurrentTab('home');
-      
-      // Sign out
+      cleanupAllConnections();
       await authService.signOut();
-      
       console.log('✅ Logout complete');
     } catch (error) {
-      console.error('Error logging out:', error);
+      console.error('❌ Logout error:', error);
     }
   };
 
@@ -354,6 +409,7 @@ const App: React.FC = () => {
     setRequestError(undefined);
     
     try {
+      console.log('[App] 🚗 Requesting trip...');
       const trip = await supabase.createTrip(
         currentUser.id, 
         pickupInput, 
@@ -361,11 +417,12 @@ const App: React.FC = () => {
         pickupCoords,
         destinationCoords
       );
-      // We just set the trip here. The useEffect above handles the subscription automatically.
+      
+      console.log('[App] ✅ Trip created:', trip.id);
       setCurrentTrip(trip);
       
     } catch (error: any) {
-      console.error('Error requesting trip:', error);
+      console.error('[App] ❌ Trip request failed:', error);
       setRequestError(error.message || 'Failed to request trip. Please try again.');
     } finally {
       setIsRequesting(false);
@@ -375,31 +432,37 @@ const App: React.FC = () => {
   const acceptTrip = async () => {
     if (!availableTrip || !currentUser) return;
 
+    console.log('[App] 🤝 Accepting trip:', availableTrip.id);
+
+    // Optimistically hide the available trip immediately
+    setAvailableTrip(null);
+
     try {
       const trip = await supabase.acceptTrip(availableTrip.id, currentUser.id);
+      
       if (trip) {
+        console.log('[App] ✅ Trip accepted successfully');
         setCurrentTrip(trip);
-        setAvailableTrip(null);
-        // Again, subscription is handled by the useEffect automatically
       } else {
-        // If accept returns null, it likely failed or trip was taken
-        setAvailableTrip(null);
-        alert('This trip is no longer available.');
+        // Trip was taken by another driver
+        console.log('[App] ⚠️ Trip no longer available');
+        alert('This trip was accepted by another driver.');
       }
     } catch (error) {
-      console.error('Error accepting trip:', error);
+      console.error('[App] ❌ Accept trip error:', error);
       alert('Failed to accept trip. Please try again.');
     }
   };
 
   const updateTripStatus = async (status: TripStatus) => {
     if (!currentTrip) {
-      console.error('Cannot update status: No active trip');
+      console.error('[App] ❌ Cannot update status: No active trip');
       return;
     }
 
-    // Handle idle status (cancelling/ending trip)
+    // Handle ending trip
     if (status === TripStatus.IDLE) {
+      console.log('[App] 🏁 Ending trip');
       if (rtcServiceRef.current) {
         rtcServiceRef.current.destroy();
         rtcServiceRef.current = null;
@@ -408,47 +471,36 @@ const App: React.FC = () => {
       return;
     }
     
-    console.log(`Updating trip status from ${currentTrip.status} to ${status}`);
+    console.log(`[App] 🔄 Updating trip status: ${currentTrip.status} → ${status}`);
 
-    // Track local update time to prevent race conditions
+    // Track local update time
     lastLocalUpdateRef.current = Date.now();
 
-    // OPTIMISTIC UPDATE: Update UI immediately
+    // Optimistic update
     const previousTrip = { ...currentTrip };
     setCurrentTrip(prev => prev ? ({ ...prev, status }) : null);
 
     try {
-      // Send update to server
       const updatedTrip = await supabase.updateTripStatus(currentTrip.id, status);
       
       if (updatedTrip) {
-        // Sync with server response
+        console.log('[App] ✅ Trip status updated successfully');
         setCurrentTrip(updatedTrip);
       } else {
-        // Rollback if failed
-        console.error('Server returned null for status update, reverting...');
+        // Rollback
+        console.error('[App] ❌ Status update failed, reverting');
         setCurrentTrip(previousTrip);
         alert('Failed to update trip status. Please check your connection.');
       }
     } catch (error) {
-      console.error('Error updating trip status:', error);
-      // Rollback on error
+      console.error('[App] ❌ Status update error:', error);
       setCurrentTrip(previousTrip);
       alert('Failed to update trip status.');
     }
   };
 
   const handleLocationSelect = (name: string, coords: { lat: number, lng: number }) => {
-    // If we are choosing a location, we are likely searching for destination if pickup is set, 
-    // or maybe modifying pickup. The visualizer logic for search is usually "search where to go".
-    // But currently MapVisualizer search is generic.
-    
-    // Simple logic: if destination is empty, set destination. Else set pickup?
-    // Actually, let's assume the search bar in MapVisualizer is for "Where to?" primarily if we are in "home" mode.
-    // However, the Search input in MapVisualizer sets the map center. 
-    // We should probably rely on the user explicitly setting pickup/dest via inputs or the map search result.
-    
-    // For now, let's map the search result to destination if it's empty, or update it if it's not.
+    console.log('[App] 📍 Location selected:', name);
     setDestinationInput(name);
     setDestinationCoords(coords);
   };
@@ -456,7 +508,7 @@ const App: React.FC = () => {
   // --- Call Handlers ---
   const initiateCall = async () => {
     if (!rtcServiceRef.current) {
-      console.error('[App] Cannot initiate call: WebRTC service not initialized');
+      console.error('[App] ❌ Cannot initiate call: WebRTC not ready');
       alert('Call service not ready. Please wait a moment.');
       return;
     }
@@ -491,7 +543,7 @@ const App: React.FC = () => {
         console.log('[App] ✅ Local stream started');
       }
     } catch (err: any) {
-      console.error("[App] Failed to initiate call:", err);
+      console.error("[App] ❌ Call initiation failed:", err);
       if (isMounted.current) {
         setIsCallModalOpen(false);
         setIsCalling(false);
@@ -502,7 +554,7 @@ const App: React.FC = () => {
 
   const answerCall = async () => {
     if (!rtcServiceRef.current) {
-      console.error('[App] Cannot answer call: WebRTC service not initialized');
+      console.error('[App] ❌ Cannot answer: WebRTC not ready');
       return;
     }
 
@@ -537,7 +589,7 @@ const App: React.FC = () => {
         console.log('[App] ✅ Local stream started');
       }
     } catch (err: any) {
-      console.error("[App] Failed to answer call:", err);
+      console.error("[App] ❌ Answer call failed:", err);
       if (isMounted.current) {
         setIsCallModalOpen(false);
         setIsCalling(false);
@@ -548,6 +600,7 @@ const App: React.FC = () => {
   };
 
   const endCall = () => {
+    console.log('[App] 📵 Ending call');
     if (rtcServiceRef.current) {
       rtcServiceRef.current.endCall();
     }
@@ -598,15 +651,12 @@ const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans">
       
-      {/* Show Global Header only on Home tab */}
       {currentTab === 'home' && (
         <Header user={currentUser} onLogout={logout} />
       )}
 
-      {/* Main Content Area */}
       <div className="flex-1 relative">
         
-        {/* HOME TAB CONTENT (Map, Request, etc.) */}
         <div 
           className="absolute inset-0 flex flex-col"
           style={{ 
@@ -634,7 +684,7 @@ const App: React.FC = () => {
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
                     <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center animate-pulse">
-                      <Phone size={24} />
+                      <span className="text-2xl">📞</span>
                     </div>
                     <div>
                       <h3 className="font-bold text-lg">Incoming Call</h3>
@@ -663,14 +713,14 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* Driver Incoming Trip Request */}
+          {/* Driver Trip Request */}
           {currentUser.role === UserRole.DRIVER && availableTrip && !currentTrip && (
             <div className="absolute top-24 left-4 right-4 z-40 md:left-auto md:right-8 md:w-96">
               <div className="bg-white rounded-2xl shadow-2xl border-2 border-emerald-500 p-6 animate-in slide-in-from-top duration-500">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
-                      <Navigation size={20} />
+                      <span className="text-xl">🚗</span>
                     </div>
                     <div>
                       <h3 className="font-bold text-zinc-900">New Trip Request!</h3>
@@ -684,11 +734,11 @@ const App: React.FC = () => {
                 
                 <div className="space-y-3 mb-6">
                   <div className="flex items-center gap-3 text-zinc-700">
-                    <MapPin size={18} className="text-zinc-400" />
+                    <span className="text-sm">📍</span>
                     <span className="text-sm font-medium">{availableTrip.pickup}</span>
                   </div>
                   <div className="flex items-center gap-3 text-zinc-700">
-                    <MapPin size={18} className="text-emerald-500" />
+                    <span className="text-sm">📍</span>
                     <span className="text-sm font-medium">{availableTrip.destination}</span>
                   </div>
                 </div>
@@ -711,7 +761,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* Bottom Controls for Home */}
+          {/* Bottom Controls */}
           <div className="absolute bottom-20 left-0 right-0 z-40 p-4 md:max-w-md md:mx-auto md:bottom-28">
             
             {currentUser.role === UserRole.RIDER && !currentTrip && (
@@ -738,7 +788,7 @@ const App: React.FC = () => {
             {currentUser.role === UserRole.DRIVER && !currentTrip && !availableTrip && (
               <div className="bg-white rounded-2xl shadow-xl p-6 text-center border border-zinc-100">
                   <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-                    <Car size={32} className="text-emerald-600" />
+                    <span className="text-3xl">🚗</span>
                   </div>
                   <h3 className="text-xl font-bold text-zinc-900">You are Online</h3>
                   <p className="text-zinc-500 mt-1">Waiting for ride requests...</p>
@@ -747,18 +797,10 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* SERVICES TAB */}
-        {currentTab === 'services' && (
-          <Services />
-        )}
-
-        {/* ACCOUNT TAB */}
-        {currentTab === 'account' && (
-          <Account user={currentUser} onLogout={logout} />
-        )}
+        {currentTab === 'services' && <Services />}
+        {currentTab === 'account' && <Account user={currentUser} onLogout={logout} />}
       </div>
 
-      {/* Call Modal - Always visible if active */}
       {isCallModalOpen && (
         <CallModal 
           localStream={localStream}
@@ -769,7 +811,6 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Bottom Navigation */}
       <BottomNav 
         currentTab={currentTab} 
         onTabChange={setCurrentTab} 
