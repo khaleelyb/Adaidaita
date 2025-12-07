@@ -178,8 +178,9 @@ class SupabaseService {
           fare,
           pickup_lat: pickupCoords?.lat || INITIAL_MAP_CENTER.lat,
           pickup_lng: pickupCoords?.lng || INITIAL_MAP_CENTER.lng,
-          dest_lat: destinationCoords?.lat || null,
-          dest_lng: destinationCoords?.lng || null
+          // Removed destination lat/lng columns as they don't exist in the schema yet
+          // dest_lat: destinationCoords?.lat || null,
+          // dest_lng: destinationCoords?.lng || null
         })
         .select()
         .single();
