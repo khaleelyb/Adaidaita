@@ -19,21 +19,17 @@ interface MapVisualizerProps {
   pickup?: string;
   destination?: string;
   isSearching?: boolean;
-  onLocationSelect?: (locationName: string) => void;
+  onLocationSelect?: (locationName: string, coords: { lat: number; lng: number }) => void;
+  // New props for handling external coordinate updates if needed
+  pickupCoords?: { lat: number; lng: number };
+  destinationCoords?: { lat: number; lng: number };
 }
 
-// Mock coordinates for the search demo (Kano, Nigeria)
-const MOCKED_LOCATIONS: Record<string, { lat: number; lng: number }> = {
-  "Central Market": { lat: 12.0000, lng: 8.5900 },
-  "Mallam Aminu Kano Int'l Airport": { lat: 12.0444, lng: 8.5323 },
-  "Bayero University": { lat: 11.9804, lng: 8.4287 },
-  "Shoprite Kano": { lat: 11.9742, lng: 8.5398 },
-  "Emir's Palace": { lat: 11.9964, lng: 8.5167 },
-  "State Road": { lat: 11.9880, lng: 8.5400 },
-  "Nassarawa Hospital": { lat: 12.0050, lng: 8.5500 }
-};
-
-const POPULAR_LOCATIONS = Object.keys(MOCKED_LOCATIONS);
+interface SearchResult {
+  display_name: string;
+  lat: string;
+  lon: string;
+}
 
 // Component to handle map movement and auto-fit bounds
 const MapUpdater: React.FC<{ 
@@ -127,13 +123,21 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
   pickup,
   destination,
   isSearching,
-  onLocationSelect
+  onLocationSelect,
+  pickupCoords: propPickupCoords,
+  destinationCoords: propDestinationCoords
 }) => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [mapCenter, setMapCenter] = useState<[number, number]>([INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng]);
   const [isMapReady, setIsMapReady] = useState(false);
+
+  // Local state for coordinates if they aren't provided via props
+  const [localPickupCoords, setLocalPickupCoords] = useState<[number, number] | null>(null);
+  const [localDestCoords, setLocalDestCoords] = useState<[number, number] | null>(null);
 
   // Get user's current location
   useEffect(() => {
@@ -145,6 +149,16 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
           console.log('Got user location:', coords);
           setUserLocation(coords);
           setMapCenter(coords);
+          // If no pickup is set, default pickup to user location
+          if (!pickup && !propPickupCoords) {
+             if (onLocationSelect) {
+               // We don't have a name, but we have coords. 
+               // Ideally we reverse geocode here, but for now we just use "Current Location"
+               // We actually can't easily reverse geocode without an API key sometimes or hitting limits.
+               // Let's just set the coords locally.
+               setLocalPickupCoords(coords);
+             }
+          }
         },
         (error) => {
           console.warn('Geolocation error:', error);
@@ -154,8 +168,8 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
           setMapCenter(fallback);
         },
         {
-          enableHighAccuracy: false,
-          timeout: 5000,
+          enableHighAccuracy: true,
+          timeout: 10000,
           maximumAge: 0
         }
       );
@@ -174,30 +188,54 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
     }
   }, [driverLocation]);
 
-  const handleSearchSelect = (loc: string) => {
+  // Handle Search using Nominatim (OpenStreetMap)
+  useEffect(() => {
+    if (!searchQuery || searchQuery.length < 3) {
+      setSearchResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchingLocation(true);
+      try {
+        // Bias search to Nigeria/Kano
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&countrycodes=ng&limit=5`
+        );
+        const data = await response.json();
+        setSearchResults(data);
+      } catch (error) {
+        console.error("Search error:", error);
+      } finally {
+        setIsSearchingLocation(false);
+      }
+    }, 500); // Debounce
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const handleSearchSelect = (result: SearchResult) => {
+    const lat = parseFloat(result.lat);
+    const lng = parseFloat(result.lon);
+    
     if (onLocationSelect) {
-      onLocationSelect(loc);
+      onLocationSelect(result.display_name.split(',')[0], { lat, lng });
     }
-    const coords = MOCKED_LOCATIONS[loc];
-    if (coords) {
-      setMapCenter([coords.lat, coords.lng]);
-    }
+    
+    setMapCenter([lat, lng]);
     setSearchQuery("");
     setIsSearchOpen(false);
   };
 
-  const filteredLocations = POPULAR_LOCATIONS.filter(loc => 
-    loc.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Determine effective coordinates
+  // Use props if available (from parent state), otherwise fallback to local search results if stored
+  const effectivePickupCoords: [number, number] | null = propPickupCoords 
+    ? [propPickupCoords.lat, propPickupCoords.lng] 
+    : (userLocation || localPickupCoords); // Fallback to user location for pickup if nothing else
 
-  // Get coordinates for pickup and destination
-  const pickupCoords: [number, number] | null = pickup && MOCKED_LOCATIONS[pickup] 
-    ? [MOCKED_LOCATIONS[pickup].lat, MOCKED_LOCATIONS[pickup].lng]
-    : userLocation;
-    
-  const destinationCoords: [number, number] | null = destination && MOCKED_LOCATIONS[destination]
-    ? [MOCKED_LOCATIONS[destination].lat, MOCKED_LOCATIONS[destination].lng]
-    : null;
+  const effectiveDestCoords: [number, number] | null = propDestinationCoords
+    ? [propDestinationCoords.lat, propDestinationCoords.lng]
+    : localDestCoords;
 
   const driverCoords: [number, number] | null = driverLocation 
     ? [driverLocation.lat, driverLocation.lng]
@@ -216,20 +254,11 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
     return R * c;
   };
 
-  const distance = pickupCoords && destinationCoords
-    ? calculateDistance(pickupCoords[0], pickupCoords[1], destinationCoords[0], destinationCoords[1])
+  const distance = effectivePickupCoords && effectiveDestCoords
+    ? calculateDistance(effectivePickupCoords[0], effectivePickupCoords[1], effectiveDestCoords[0], effectiveDestCoords[1])
     : 0;
 
   const estimatedTime = Math.round(distance * 2.5); // Rough estimate: 2.5 min per km
-
-  console.log('Map render:', {
-    mapCenter,
-    userLocation,
-    pickupCoords,
-    destinationCoords,
-    driverCoords,
-    distance
-  });
 
   return (
     <div className="relative w-full h-full bg-zinc-100">
@@ -254,15 +283,15 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
         
         <MapUpdater 
           center={mapCenter} 
-          pickupCoords={pickupCoords}
-          destinationCoords={destinationCoords}
+          pickupCoords={effectivePickupCoords}
+          destinationCoords={effectiveDestCoords}
           driverCoords={driverCoords}
         />
 
         {/* Route Line */}
-        {pickupCoords && destinationCoords && (
+        {effectivePickupCoords && effectiveDestCoords && (
           <Polyline 
-            positions={[pickupCoords, destinationCoords]}
+            positions={[effectivePickupCoords, effectiveDestCoords]}
             pathOptions={{
               color: '#059669',
               weight: 4,
@@ -274,20 +303,20 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
           />
         )}
 
-        {/* User's Current Location (Blue Dot) */}
-        {userLocation && !driverLocation && (
+        {/* User's Current Location / Pickup (Blue Dot) */}
+        {effectivePickupCoords && !driverLocation && (
           <Marker 
-            position={userLocation} 
+            position={effectivePickupCoords} 
             icon={createCurrentLocationIcon()}
           >
-            <Popup>Your Location</Popup>
+            <Popup>{pickup || "Your Location"}</Popup>
           </Marker>
         )}
 
         {/* Destination Marker */}
-        {destinationCoords && (
+        {effectiveDestCoords && (
           <Marker 
-            position={destinationCoords} 
+            position={effectiveDestCoords} 
             icon={createDestinationIcon()}
           >
             <Popup>{destination}</Popup>
@@ -323,7 +352,7 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
       )}
 
       {/* Trip Info Overlay */}
-      {pickupCoords && destinationCoords && distance > 0 && isMapReady && (
+      {effectivePickupCoords && effectiveDestCoords && distance > 0 && isMapReady && (
         <div className="absolute top-24 right-4 z-40 bg-white rounded-xl shadow-lg p-3 border border-zinc-100">
           <div className="flex items-center gap-2 mb-1">
             <Navigation2 size={16} className="text-emerald-600" />
@@ -368,19 +397,26 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
                 </button>
               </div>
               <div className="max-h-60 overflow-y-auto">
-                {filteredLocations.map((loc, idx) => (
+                {isSearchingLocation && (
+                  <div className="p-4 text-center">
+                    <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                  </div>
+                )}
+                
+                {!isSearchingLocation && searchResults.map((result, idx) => (
                   <button 
                     key={idx}
-                    onClick={() => handleSearchSelect(loc)}
+                    onClick={() => handleSearchSelect(result)}
                     className="w-full text-left px-4 py-3 text-sm text-zinc-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors border-b border-zinc-50 last:border-0 flex items-center group"
                   >
                     <div className="p-1.5 bg-zinc-100 rounded-full mr-3 group-hover:bg-emerald-100 transition-colors">
                       <MapPin size={12} className="text-zinc-500 group-hover:text-emerald-600" />
                     </div>
-                    {loc}
+                    <span className="truncate">{result.display_name}</span>
                   </button>
                 ))}
-                {filteredLocations.length === 0 && (
+                
+                {!isSearchingLocation && searchResults.length === 0 && searchQuery.length >= 3 && (
                   <div className="px-4 py-8 text-center">
                     <p className="text-xs text-zinc-400 italic">No locations found</p>
                   </div>
