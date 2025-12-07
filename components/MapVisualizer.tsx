@@ -1,12 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
-import L from 'leaflet';
+import L, { LatLngTuple, Marker as LeafletMarker } from 'leaflet';
 import { Location, UserRole } from '../types';
 import { Search, X, MapPin, Navigation2 } from 'lucide-react';
 import { INITIAL_MAP_CENTER } from '../constants';
+import 'leaflet/dist/leaflet.css';
 
-// CRITICAL: Fix Leaflet default marker icons
-delete (L.Icon.Default.prototype as any)._getIconUrl;
+// --- CRITICAL FIX 4: Fix Leaflet default marker icons ---
+// This is necessary in many modern React/Webpack setups
+if ((L.Icon.Default.prototype as any)._getIconUrl) { // FIX: Added conditional check
+  delete (L.Icon.Default.prototype as any)._getIconUrl;
+}
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
@@ -20,425 +24,333 @@ interface MapVisualizerProps {
   destination?: string;
   isSearching?: boolean;
   onLocationSelect?: (locationName: string, coords: { lat: number; lng: number }) => void;
-  // New props for handling external coordinate updates if needed
   pickupCoords?: { lat: number; lng: number };
   destinationCoords?: { lat: number; lng: number };
 }
 
-interface SearchResult {
+interface NominatimResult {
   display_name: string;
   lat: string;
   lon: string;
 }
 
-// Component to handle map movement and auto-fit bounds
+// Custom Icon for Driver
+const driverIcon = new L.Icon({
+  iconUrl: '/car-icon.png', // Assuming you have a small car icon image
+  iconSize: [32, 32],
+  iconAnchor: [16, 16], // center the icon
+  popupAnchor: [0, -16]
+});
+
+// Custom Icon for Pickup
+const pickupIcon = new L.Icon({
+  iconUrl: '/pickup-icon.png',
+  iconSize: [32, 32],
+  iconAnchor: [16, 32],
+});
+
+// Custom Icon for Destination
+const destinationIcon = new L.Icon({
+  iconUrl: '/destination-icon.png',
+  iconSize: [32, 32],
+  iconAnchor: [16, 32],
+});
+
+
+/**
+ * Subcomponent to handle map movement, coordinate processing, and routing.
+ */
 const MapUpdater: React.FC<{ 
-  center: [number, number]; 
-  zoom?: number;
-  pickupCoords?: [number, number] | null;
-  destinationCoords?: [number, number] | null;
-  driverCoords?: [number, number] | null;
-}> = ({ center, zoom, pickupCoords, destinationCoords, driverCoords }) => {
+  pickupCoords: { lat: number; lng: number } | undefined;
+  destinationCoords: { lat: number; lng: number } | undefined;
+  driverLocation: Location | undefined;
+  isSearching: boolean;
+}> = React.memo(({ pickupCoords, destinationCoords, driverLocation, isSearching }) => {
   const map = useMap();
-  
+  const routeRef = useRef<LatLngTuple[]>([]);
+  const driverMarkerRef = useRef<LeafletMarker | null>(null);
+
+  // 1. Fit bounds to show both pickup and destination
   useEffect(() => {
-    try {
-      // If we have multiple points, fit bounds to show them all
-      if (pickupCoords && destinationCoords) {
-        const bounds = L.latLngBounds([pickupCoords, destinationCoords]);
-        
-        // Include driver location if available
-        if (driverCoords) {
-          bounds.extend(driverCoords);
-        }
-        
-        map.fitBounds(bounds, { 
-          padding: [80, 80],
-          maxZoom: 15,
-          animate: true,
-          duration: 1
-        });
-      } else {
-        map.flyTo(center, zoom || 14, {
-          animate: true,
-          duration: 1
-        });
-      }
-    } catch (error) {
-      console.error('Map update error:', error);
+    const points: LatLngTuple[] = [];
+
+    if (pickupCoords) {
+      points.push([pickupCoords.lat, pickupCoords.lng]);
     }
-  }, [center, zoom, pickupCoords, destinationCoords, driverCoords, map]);
+    if (destinationCoords) {
+      points.push([destinationCoords.lat, destinationCoords.lng]);
+    }
+
+    if (points.length > 0) {
+      // Add a small padding to the bounds
+      map.fitBounds(points, { padding: [50, 50], maxZoom: 15, animate: true, duration: 1.5 });
+    } else if (driverLocation) {
+       // If only driver is present (e.g., rider viewing driver's location before booking)
+       map.setView([driverLocation.lat, driverLocation.lng], 16, { animate: true, duration: 1.5 });
+    }
+
+  }, [map, pickupCoords, destinationCoords, driverLocation]);
+
+
+  // 2. Update Driver Marker position and bearing
+  useEffect(() => {
+    if (driverLocation) {
+      const { lat, lng, bearing } = driverLocation;
+      const latlng: LatLngTuple = [lat, lng];
+
+      if (!driverMarkerRef.current) {
+        // Create marker if it doesn't exist
+        driverMarkerRef.current = L.marker(latlng, { 
+          icon: driverIcon, 
+          rotationAngle: bearing || 0 // Use a leaflet plugin for rotation
+        }).addTo(map);
+        // Map.panTo(latlng, { animate: true, duration: 1 }); // Center on driver initially
+      } else {
+        // Update position and rotation
+        driverMarkerRef.current.setLatLng(latlng);
+        // Assuming L.marker supports rotation through a plugin or custom implementation
+        if ((driverMarkerRef.current as any).setRotationAngle) {
+          (driverMarkerRef.current as any).setRotationAngle(bearing || 0);
+        }
+      }
+      
+      // Keep map centered on driver if searching
+      if (isSearching) {
+        map.panTo(latlng, { animate: true, duration: 0.5 });
+      }
+    } else if (driverMarkerRef.current) {
+      // Remove marker if driver location is cleared
+      map.removeLayer(driverMarkerRef.current);
+      driverMarkerRef.current = null;
+    }
+    
+  }, [map, driverLocation, isSearching]);
   
-  return null;
-};
+  // 3. Routing (Placeholder - Real routing uses external API or service)
+  useEffect(() => {
+    // In a real app, this would call a routing API (e.g., OSRM, GraphHopper)
+    // to get a Polyline of coordinates for the route.
+    if (pickupCoords && destinationCoords) {
+      // Dummy route for visualization
+      routeRef.current = [
+        [pickupCoords.lat, pickupCoords.lng],
+        [destinationCoords.lat, destinationCoords.lng],
+      ] as LatLngTuple[];
+    } else {
+      routeRef.current = [];
+    }
+  }, [pickupCoords, destinationCoords]);
 
-// Custom Car Icon
-const createCarIcon = (rotation: number = 0) => {
-  return L.divIcon({
-    className: 'custom-car-marker',
-    html: `
-      <div style="transform: rotate(${rotation}deg); width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
-        <div style="width: 28px; height: 28px; background-color: #059669; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); border: 2px solid white; display: flex; align-items: center; justify-content: center;">
-          <span style="color: white; font-size: 18px;">🚗</span>
-        </div>
-      </div>
-    `,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16]
-  });
-};
+  return (
+    <>
+      {/* Route Polyline (will be updated by the useEffect hook) */}
+      <Polyline positions={routeRef.current} color="#059669" weight={6} opacity={0.7} />
 
-// Custom Current Location Icon (Blue Dot)
-const createCurrentLocationIcon = () => {
-  return L.divIcon({
-    className: 'custom-location-marker',
-    html: `
-      <div style="position: relative; width: 20px; height: 20px;">
-        <div style="width: 16px; height: 16px; background-color: #3b82f6; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
-        <div style="position: absolute; inset: 0; background-color: rgba(59, 130, 246, 0.3); border-radius: 50%; animation: pulse 2s infinite;"></div>
-      </div>
-    `,
-    iconSize: [20, 20],
-    iconAnchor: [10, 10]
-  });
-};
+      {/* Pickup Marker */}
+      {pickupCoords && (
+        <Marker position={[pickupCoords.lat, pickupCoords.lng]} icon={pickupIcon}>
+          <Popup>Pickup Location</Popup>
+        </Marker>
+      )}
 
-// Custom Destination Icon (Red marker)
-const createDestinationIcon = () => {
-  return L.divIcon({
-    className: 'custom-destination-marker',
-    html: `
-      <div style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
-        <span style="font-size: 32px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">📍</span>
-      </div>
-    `,
-    iconSize: [32, 32],
-    iconAnchor: [16, 32]
-  });
-};
+      {/* Destination Marker */}
+      {destinationCoords && (
+        <Marker position={[destinationCoords.lat, destinationCoords.lng]} icon={destinationIcon}>
+          <Popup>Destination</Popup>
+        </Marker>
+      )}
+    </>
+  );
+});
 
-export const MapVisualizer: React.FC<MapVisualizerProps> = ({ 
-  role, 
-  driverLocation, 
+// --- Main MapVisualizer Component ---
+
+// FIX 17: Memoize MapVisualizer to prevent excessive re-renders
+export const MapVisualizer: React.FC<MapVisualizerProps> = React.memo(({
+  role,
+  driverLocation,
   pickup,
   destination,
   isSearching,
   onLocationSelect,
   pickupCoords: propPickupCoords,
-  destinationCoords: propDestinationCoords
+  destinationCoords: propDestinationCoords,
 }) => {
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  
+  // Local state for coordinates if not passed as props (e.g., rider only has location names)
+  const [localPickupCoords, setLocalPickupCoords] = useState<{ lat: number; lng: number } | undefined>(propPickupCoords);
+  const [localDestCoords, setLocalDestCoords] = useState<{ lat: number; lng: number } | undefined>(propDestinationCoords);
+  
+  // State for geocoded results
+  const [geocodedDest, setGeocodedDest] = useState<{ lat: number; lng: number, name: string } | null>(null);
+
+  // Search Bar State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<NominatimResult[]>([]);
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
-  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
-  const [mapCenter, setMapCenter] = useState<[number, number]>([INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng]);
-  const [isMapReady, setIsMapReady] = useState(false);
+  const [isSearchVisible, setIsSearchVisible] = useState(false);
+  const searchTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // Local state for coordinates if they aren't provided via props
-  const [localPickupCoords, setLocalPickupCoords] = useState<[number, number] | null>(null);
-  const [localDestCoords, setLocalDestCoords] = useState<[number, number] | null>(null);
-
-  // Auto-geocoded coordinates for display fallback
-  const [geocodedDest, setGeocodedDest] = useState<[number, number] | null>(null);
-
-  // Get user's current location
+  const finalPickupCoords = propPickupCoords || localPickupCoords;
+  const finalDestinationCoords = propDestinationCoords || localDestCoords || (geocodedDest ? { lat: geocodedDest.lat, lng: geocodedDest.lng } : undefined);
+  
+  // --- Auto-Geocoding for Destination Input ---
+  // If destination is a string but coords are missing, try to geocode it automatically
   useEffect(() => {
-    if (navigator.geolocation) {
-      console.log('Requesting geolocation...');
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
-          console.log('Got user location:', coords);
-          setUserLocation(coords);
-          setMapCenter(coords);
-          // If no pickup is set, default pickup to user location
-          if (!pickup && !propPickupCoords) {
-             if (onLocationSelect) {
-               setLocalPickupCoords(coords);
-             }
+    // Use geocodedDest in dependency array (Fix 5)
+    if (destination && !propDestinationCoords && !localDestCoords && !geocodedDest) {
+      console.log(`[Geocode] 🔍 Attempting to geocode: ${destination}`);
+      
+      const geocode = async () => {
+        try {
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destination)}&countrycodes=ng&limit=1`,
+            {
+              headers: {
+                'User-Agent': 'Adaidaita/1.0 (Geocode)' // CRITICAL FIX 6: Added User-Agent
+              }
+            }
+          );
+          const data: NominatimResult[] = await response.json();
+          
+          if (data && data.length > 0) {
+            const result = data[0];
+            const coords = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
+            console.log('[Geocode] ✅ Found coordinates:', coords);
+            setGeocodedDest({ ...coords, name: result.display_name });
+          } else {
+            console.log('[Geocode] ❌ No coordinates found for destination');
           }
-        },
-        (error) => {
-          console.warn('Geolocation error:', error);
-          // Fallback to default location
-          const fallback: [number, number] = [INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng];
-          setUserLocation(fallback);
-          setMapCenter(fallback);
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 0
+        } catch (error) {
+          console.error('[Geocode] ❌ Geocoding error:', error);
         }
-      );
-    } else {
-      // No geolocation available
-      const fallback: [number, number] = [INITIAL_MAP_CENTER.lat, INITIAL_MAP_CENTER.lng];
-      setUserLocation(fallback);
-      setMapCenter(fallback);
-    }
-  }, []);
+      };
 
-  // Update map center when driver moves
-  useEffect(() => {
-    if (driverLocation) {
-      setMapCenter([driverLocation.lat, driverLocation.lng]);
-    }
-  }, [driverLocation]);
+      // Simple debounce to prevent rapid fire geocoding
+      const timer = setTimeout(geocode, 1000); 
 
-  // Handle Search using Nominatim (OpenStreetMap)
-  useEffect(() => {
-    if (!searchQuery || searchQuery.length < 3) {
+      return () => clearTimeout(timer);
+    }
+  }, [destination, propDestinationCoords, localDestCoords, geocodedDest]); // CRITICAL FIX 5: Added geocodedDest
+
+  // --- Location Search Handler (Nominatim) ---
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    if (query.length < 3) {
       setSearchResults([]);
       return;
     }
 
-    const timer = setTimeout(async () => {
-      setIsSearchingLocation(true);
+    setIsSearchingLocation(true);
+    
+    searchTimeoutRef.current = setTimeout(async () => {
       try {
-        // Bias search to Nigeria/Kano
         const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&countrycodes=ng&limit=5`
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=ng&limit=5`,
+          {
+            headers: {
+              'User-Agent': 'Adaidaita/1.0 (Search)' // CRITICAL FIX 6: Added User-Agent
+            }
+          }
         );
-        const data = await response.json();
+        const data: NominatimResult[] = await response.json();
         setSearchResults(data);
       } catch (error) {
-        console.error("Search error:", error);
+        console.error('Search failed:', error);
+        setSearchResults([]);
       } finally {
         setIsSearchingLocation(false);
       }
-    }, 500); // Debounce
+    }, 500); // 500ms debounce
+  };
 
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  // Handle Auto-Geocoding for Destination String (for Driver view)
-  useEffect(() => {
-    // Only geocode if:
-    // 1. We have a destination string
-    // 2. We DO NOT have explicit coords (prop or local)
-    // 3. We haven't already geocoded it (prevent loops/spam)
-    // 4. Destination string is long enough
-    if (
-      destination && 
-      destination.length > 3 &&
-      !propDestinationCoords && 
-      !localDestCoords &&
-      !geocodedDest
-    ) {
-      console.log('Attempting to auto-geocode destination:', destination);
-      const timer = setTimeout(async () => {
-        try {
-          const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destination)}&countrycodes=ng&limit=1`
-          );
-          const data = await response.json();
-          if (data && data.length > 0) {
-            const lat = parseFloat(data[0].lat);
-            const lng = parseFloat(data[0].lon);
-            console.log('Auto-geocoded destination:', { lat, lng });
-            setGeocodedDest([lat, lng]);
-          }
-        } catch (error) {
-          console.error("Auto-geocode error:", error);
-        }
-      }, 1000); // 1s delay to be nice to API
-
-      return () => clearTimeout(timer);
-    }
-  }, [destination, propDestinationCoords, localDestCoords, geocodedDest]);
-
-
-  const handleSearchSelect = (result: SearchResult) => {
-    const lat = parseFloat(result.lat);
-    const lng = parseFloat(result.lon);
-    
+  const handleSearchSelect = (result: NominatimResult) => {
+    const coords = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
     if (onLocationSelect) {
-      onLocationSelect(result.display_name.split(',')[0], { lat, lng });
+      onLocationSelect(result.display_name, coords);
     }
-    
-    setMapCenter([lat, lng]);
-    setSearchQuery("");
-    setIsSearchOpen(false);
-    
-    // Also update localDestCoords if we are setting destination via search
-    setLocalDestCoords([lat, lng]);
+    // Clear search state and close modal/panel
+    setSearchQuery('');
+    setSearchResults([]);
+    setIsSearchVisible(false);
+    setGeocodedDest(null); // Clear geocoded state to allow new geocoding if needed
   };
-
-  // Determine effective coordinates
-  // Use props if available (from parent state), otherwise fallback to local search results if stored
-  const effectivePickupCoords: [number, number] | null = propPickupCoords 
-    ? [propPickupCoords.lat, propPickupCoords.lng] 
-    : (userLocation || localPickupCoords); // Fallback to user location for pickup if nothing else
-
-  const effectiveDestCoords: [number, number] | null = propDestinationCoords
-    ? [propDestinationCoords.lat, propDestinationCoords.lng]
-    : (localDestCoords || geocodedDest);
-
-  const driverCoords: [number, number] | null = driverLocation 
-    ? [driverLocation.lat, driverLocation.lng]
-    : null;
-
-  // Calculate estimated distance and time
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371; // Earth's radius in km
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-      Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-  };
-
-  const distance = effectivePickupCoords && effectiveDestCoords
-    ? calculateDistance(effectivePickupCoords[0], effectivePickupCoords[1], effectiveDestCoords[0], effectiveDestCoords[1])
-    : 0;
-
-  const estimatedTime = Math.round(distance * 2.5); // Rough estimate: 2.5 min per km
-
+  
+  // --- Determine Map Center ---
+  let initialCenter: LatLngTuple;
+  if (finalPickupCoords) {
+    initialCenter = [finalPickupCoords.lat, finalPickupCoords.lng];
+  } else if (driverLocation) {
+    initialCenter = [driverLocation.lat, driverLocation.lng];
+  } else {
+    // Default fallback (e.g., center of Nigeria)
+    initialCenter = INITIAL_MAP_CENTER as LatLngTuple; 
+  }
+  
+  // --- Main Render ---
   return (
-    <div className="relative w-full h-full bg-zinc-100">
-      
+    <div className="w-full h-full relative">
       <MapContainer 
-        center={mapCenter} 
-        zoom={14} 
-        scrollWheelZoom={true} 
-        zoomControl={false}
-        style={{ width: '100%', height: '100%' }}
+        center={initialCenter} 
+        zoom={13} 
+        style={{ height: '100%', width: '100%' }}
+        scrollWheelZoom={true}
         className="z-0"
-        whenReady={() => {
-          console.log('Map is ready!');
-          setIsMapReady(true);
-        }}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          errorTileUrl="https://tile.openstreetmap.org/0/0/0.png"
         />
         
         <MapUpdater 
-          center={mapCenter} 
-          pickupCoords={effectivePickupCoords}
-          destinationCoords={effectiveDestCoords}
-          driverCoords={driverCoords}
+          pickupCoords={finalPickupCoords}
+          destinationCoords={finalDestinationCoords}
+          driverLocation={driverLocation}
+          isSearching={isSearching || false}
         />
-
-        {/* Route Line */}
-        {effectivePickupCoords && effectiveDestCoords && (
-          <Polyline 
-            positions={[effectivePickupCoords, effectiveDestCoords]}
-            pathOptions={{
-              color: '#059669',
-              weight: 4,
-              opacity: 0.8,
-              dashArray: '10, 10',
-              lineCap: 'round',
-              lineJoin: 'round'
-            }}
-          />
-        )}
-
-        {/* User's Current Location / Pickup (Blue Dot) */}
-        {effectivePickupCoords && !driverLocation && (
-          <Marker 
-            position={effectivePickupCoords} 
-            icon={createCurrentLocationIcon()}
-          >
-            <Popup>{pickup || "Your Location"}</Popup>
-          </Marker>
-        )}
-
-        {/* Destination Marker */}
-        {effectiveDestCoords && (
-          <Marker 
-            position={effectiveDestCoords} 
-            icon={createDestinationIcon()}
-          >
-            <Popup>{destination}</Popup>
-          </Marker>
-        )}
-
-        {/* Driver Marker */}
-        {driverCoords && (
-          <Marker 
-            position={driverCoords} 
-            icon={createCarIcon(driverLocation?.bearing || 0)}
-          >
-            <Popup>Driver Location</Popup>
-          </Marker>
-        )}
+        
       </MapContainer>
 
-      {/* Loading Overlay */}
-      {!isMapReady && (
-        <div className="absolute inset-0 bg-white flex items-center justify-center z-50">
-          <div className="text-center">
-            <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <p className="text-zinc-600 font-medium">Loading map...</p>
-          </div>
-        </div>
-      )}
-
-      {/* Searching Pulse Animation Overlay */}
-      {isSearching && isMapReady && (
-        <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
-          <div className="w-96 h-96 bg-emerald-500/10 rounded-full animate-ping"></div>
-        </div>
-      )}
-
-      {/* Trip Info Overlay */}
-      {effectivePickupCoords && effectiveDestCoords && distance > 0 && isMapReady && (
-        <div className="absolute top-24 right-4 z-40 bg-white rounded-xl shadow-lg p-3 border border-zinc-100">
-          <div className="flex items-center gap-2 mb-1">
-            <Navigation2 size={16} className="text-emerald-600" />
-            <span className="text-xs font-bold text-zinc-600">ROUTE INFO</span>
-          </div>
-          <div className="space-y-1">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-zinc-500">Distance:</span>
-              <span className="text-sm font-bold text-zinc-900">{distance.toFixed(1)} km</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-zinc-500">Est. Time:</span>
-              <span className="text-sm font-bold text-zinc-900">{estimatedTime} min</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Controls Layer */}
-      {onLocationSelect && !isSearching && isMapReady && (
-        <div className="absolute top-24 left-4 z-40 flex flex-col items-start space-y-2">
-          {!isSearchOpen ? (
-             <button 
-               onClick={() => setIsSearchOpen(true)}
-               className="bg-white p-3 rounded-xl shadow-xl border border-zinc-100 text-zinc-600 hover:text-emerald-600 transition-all active:scale-95"
-             >
-               <Search size={20} />
-             </button>
+      {/* Floating Search Button/Bar */}
+      {role === UserRole.RIDER && !finalDestinationCoords && (
+        <div className="absolute top-4 left-4 right-4 z-10 md:left-auto md:right-8 md:w-96">
+          {!isSearchVisible ? (
+            <button 
+              onClick={() => setIsSearchVisible(true)}
+              className="w-full bg-white rounded-xl shadow-xl p-4 flex items-center justify-between text-zinc-600 hover:shadow-2xl transition-all"
+            >
+              <span className="font-semibold text-zinc-900 truncate">{destination || 'Where are you going?'}</span>
+              <Search size={20} className="text-emerald-600" />
+            </button>
           ) : (
-            <div className="bg-white rounded-2xl shadow-xl border border-zinc-100 w-72 overflow-hidden">
-              <div className="flex items-center p-3 border-b border-zinc-100">
-                <Search size={16} className="text-zinc-400 ml-1" />
-                <input 
-                  autoFocus
-                  className="flex-1 bg-transparent border-none outline-none text-sm px-3 text-zinc-800 placeholder-zinc-400"
-                  placeholder="Where to?"
+            <div className="bg-white rounded-xl shadow-2xl p-2">
+              <div className="flex items-center border-b border-zinc-100 p-2">
+                <Search size={20} className="text-zinc-400 mr-2" />
+                <input
+                  type="text"
+                  placeholder="Enter destination..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  className="flex-1 border-none outline-none focus:ring-0 text-zinc-900"
                 />
-                <button onClick={() => setIsSearchOpen(false)} className="p-1 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded-full">
-                  <X size={16} />
+                <button 
+                  onClick={() => setIsSearchVisible(false)}
+                  className="p-1 text-zinc-500 hover:text-zinc-800 transition-colors"
+                >
+                  <X size={20} />
                 </button>
               </div>
-              <div className="max-h-60 overflow-y-auto">
+
+              {/* Search Results */}
+              <div className="max-h-64 overflow-y-auto">
                 {isSearchingLocation && (
-                  <div className="p-4 text-center">
-                    <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                  <div className="flex items-center justify-center p-4">
+                    <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mr-2"></div>
+                    <span className="text-sm text-zinc-500">Searching...</span>
                   </div>
                 )}
                 
@@ -466,19 +378,41 @@ export const MapVisualizer: React.FC<MapVisualizerProps> = ({
         </div>
       )}
 
-      {/* Add pulse animation keyframes */}
+      {/* Add pulse animation keyframes for location update visual feedback */}
       <style>{`
-        @keyframes pulse {
-          0%, 100% {
-            opacity: 0.3;
-            transform: scale(1);
+        @keyframes pulse-loc {
+          0% {
+            box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.4);
           }
-          50% {
-            opacity: 0.1;
-            transform: scale(1.5);
+          70% {
+            box-shadow: 0 0 0 10px rgba(5, 150, 105, 0);
+          }
+          100% {
+            box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
           }
         }
       `}</style>
     </div>
   );
-};
+}, (prevProps, nextProps) => {
+  // FIX 17: Custom comparison to prevent re-render on irrelevant state changes
+  // Only re-render if:
+  // 1. Coordinates change (pickup/destination)
+  // 2. Driver location changes
+  // 3. Trip status changes (which affects isSearching)
+  // 4. Role changes
+  
+  const areCoordsEqual = (c1?: {lat: number, lng: number}, c2?: {lat: number, lng: number}) => 
+    c1?.lat === c2?.lat && c1?.lng === c2?.lng;
+    
+  const areLocationsEqual = (l1?: Location, l2?: Location) => 
+    l1?.lat === l2?.lat && l1?.lng === l2?.lng && l1?.bearing === l2?.bearing;
+
+  return prevProps.role === nextProps.role &&
+         areCoordsEqual(prevProps.pickupCoords, nextProps.pickupCoords) &&
+         areCoordsEqual(prevProps.destinationCoords, nextProps.destinationCoords) &&
+         areLocationsEqual(prevProps.driverLocation, nextProps.driverLocation) &&
+         prevProps.isSearching === nextProps.isSearching &&
+         prevProps.pickup === nextProps.pickup &&
+         prevProps.destination === nextProps.destination;
+});
