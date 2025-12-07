@@ -26,8 +26,13 @@ const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState('home');
 
   // UI State
-  const [pickupInput, setPickupInput] = useState('Central Market');
+  const [pickupInput, setPickupInput] = useState('Current Location');
   const [destinationInput, setDestinationInput] = useState('');
+  
+  // Coordinates State
+  const [pickupCoords, setPickupCoords] = useState<{lat: number, lng: number} | undefined>(undefined);
+  const [destinationCoords, setDestinationCoords] = useState<{lat: number, lng: number} | undefined>(undefined);
+
   const [isRequesting, setIsRequesting] = useState(false);
   const [requestError, setRequestError] = useState<string | undefined>(undefined);
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
@@ -43,6 +48,7 @@ const App: React.FC = () => {
   const isMounted = useRef(true);
   const authSubscriptionRef = useRef<any>(null);
   const lastLocalUpdateRef = useRef<number>(0);
+  const watchIdRef = useRef<number | null>(null);
 
   // --- Auth Handlers ---
   useEffect(() => {
@@ -140,7 +146,6 @@ const App: React.FC = () => {
     });
 
     // B. Polling Fallback 
-    // ONLY poll if searching (critical) or if it's been a while since last action
     const shouldPoll = currentTrip.status === TripStatus.SEARCHING;
     
     let poller: NodeJS.Timeout | null = null;
@@ -186,13 +191,11 @@ const App: React.FC = () => {
       : currentTrip.riderId;
 
     if (!targetUserId) {
-      // If we don't have a target user yet, we can't connect
       return;
     }
 
     console.log('[App] 🎧 Setting up call listener for trip:', currentTrip.id);
 
-    // Create WebRTC service and start listening
     const rtc = new WebRTCService(
       currentTrip.id,
       currentUser.id,
@@ -254,6 +257,58 @@ const App: React.FC = () => {
     };
   }, [currentUser?.id, currentUser?.role, currentTrip]);
 
+  // --- Real Driver Location Tracking (GPS) ---
+  useEffect(() => {
+    // Only track if:
+    // 1. User is a driver
+    // 2. User is currently in an active trip (Accepted, In Progress)
+    if (
+      !currentUser || 
+      currentUser.role !== UserRole.DRIVER || 
+      !currentTrip || 
+      (currentTrip.status !== TripStatus.ACCEPTED && currentTrip.status !== TripStatus.IN_PROGRESS)
+    ) {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      return;
+    }
+
+    console.log('[GPS] Starting location tracking...');
+
+    if (navigator.geolocation) {
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        async (position) => {
+          const { latitude, longitude, heading } = position.coords;
+          
+          // Update DB
+          await supabase.updateDriverLocation(currentUser.id, {
+            lat: latitude,
+            lng: longitude,
+            bearing: heading || 0
+          });
+        },
+        (error) => {
+          console.error('[GPS] Error tracking location:', error);
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 10000,
+          timeout: 5000
+        }
+      );
+    }
+
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, [currentUser, currentTrip]);
+
+
   const logout = async () => {
     try {
       console.log('👋 Logging out...');
@@ -286,11 +341,23 @@ const App: React.FC = () => {
   // --- Trip Handlers ---
   const requestTrip = async () => {
     if (!currentUser) return;
+    
+    if (!pickupInput || !destinationInput) {
+      setRequestError('Please select both pickup and destination');
+      return;
+    }
+
     setIsRequesting(true);
     setRequestError(undefined);
     
     try {
-      const trip = await supabase.createTrip(currentUser.id, pickupInput, destinationInput);
+      const trip = await supabase.createTrip(
+        currentUser.id, 
+        pickupInput, 
+        destinationInput,
+        pickupCoords,
+        destinationCoords
+      );
       // We just set the trip here. The useEffect above handles the subscription automatically.
       setCurrentTrip(trip);
       
@@ -366,6 +433,21 @@ const App: React.FC = () => {
       setCurrentTrip(previousTrip);
       alert('Failed to update trip status.');
     }
+  };
+
+  const handleLocationSelect = (name: string, coords: { lat: number, lng: number }) => {
+    // If we are choosing a location, we are likely searching for destination if pickup is set, 
+    // or maybe modifying pickup. The visualizer logic for search is usually "search where to go".
+    // But currently MapVisualizer search is generic.
+    
+    // Simple logic: if destination is empty, set destination. Else set pickup?
+    // Actually, let's assume the search bar in MapVisualizer is for "Where to?" primarily if we are in "home" mode.
+    // However, the Search input in MapVisualizer sets the map center. 
+    // We should probably rely on the user explicitly setting pickup/dest via inputs or the map search result.
+    
+    // For now, let's map the search result to destination if it's empty, or update it if it's not.
+    setDestinationInput(name);
+    setDestinationCoords(coords);
   };
 
   // --- Call Handlers ---
@@ -535,8 +617,10 @@ const App: React.FC = () => {
               driverLocation={currentTrip?.driverLocation}
               pickup={currentTrip?.pickup || pickupInput}
               destination={currentTrip?.destination || destinationInput}
+              pickupCoords={pickupCoords}
+              destinationCoords={destinationCoords}
               isSearching={currentTrip?.status === TripStatus.SEARCHING}
-              onLocationSelect={setPickupInput}
+              onLocationSelect={handleLocationSelect}
             />
           </div>
 
