@@ -48,7 +48,7 @@ export const RideRequestPanel: React.FC<RideRequestPanelProps> = ({
     }
   };
 
-  // Estimate fare and time
+  // Estimate fare and time (Mocked for now, pending backend pricing engine)
   const estimatedFare = destination ? Math.floor(Math.random() * 2000) + 500 : 0;
   const estimatedTime = destination ? Math.floor(Math.random() * 10) + 5 : 0;
 
@@ -100,9 +100,9 @@ export const RideRequestPanel: React.FC<RideRequestPanelProps> = ({
                 disabled={disabled}
               />
             </div>
-            {pickup && pickup !== 'Central Market' && (
+            {pickup && (
               <button 
-                onClick={() => setPickup('Central Market')}
+                onClick={() => setPickup('')}
                 className="ml-2 p-1 hover:bg-zinc-200 rounded-full transition-colors flex-shrink-0"
               >
                 <X size={16} className="text-zinc-400" />
