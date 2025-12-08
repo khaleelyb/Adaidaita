@@ -3,7 +3,7 @@ import { SUPABASE_CONFIG } from '../constants';
 import { User, UserRole } from '../types';
 
 // Use a unique storage key that won't conflict with window.storage
-const SUPABASE_AUTH_STORAGE_KEY = 'sb-adaidaita-auth';
+export const SUPABASE_AUTH_STORAGE_KEY = 'sb-adaidaita-auth';
 
 const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
   auth: {
@@ -24,6 +24,15 @@ const log = {
 
 export class AuthService {
   private authStateChangeListeners: ((user: User | null) => void)[] = [];
+
+  /**
+   * Synchronously checks if a session exists in localStorage
+   * This prevents waiting for async auth checks if we know we are logged out
+   */
+  public hasSavedSession(): boolean {
+    const sessionStr = localStorage.getItem(SUPABASE_AUTH_STORAGE_KEY);
+    return !!sessionStr;
+  }
 
   async signUp(email: string, password: string, name: string, role: UserRole) {
     try {
@@ -182,17 +191,14 @@ export class AuthService {
    * Safely clears ONLY Supabase auth-related storage
    * Does NOT touch window.storage keys or other localStorage data
    */
-  private clearSupabaseAuthStorage() {
+  public clearSupabaseAuthStorage() {
     try {
       // Clear the specific Supabase auth key we configured
       localStorage.removeItem(SUPABASE_AUTH_STORAGE_KEY);
       
       // Also clear any legacy Supabase keys that might exist
-      // (in case user has old sessions from default key)
       const keys = Object.keys(localStorage);
       keys.forEach(key => {
-        // Only remove keys that match Supabase auth patterns
-        // IMPORTANT: Don't touch any other keys
         if (
           key.startsWith('sb-') && 
           (key.includes('-auth-token') || key.includes('supabase.auth.token'))
@@ -255,13 +261,32 @@ export class AuthService {
   }
 
   async getCurrentUser(): Promise<User | null> {
+    // 1. Check local storage first (Sync check)
+    if (!this.hasSavedSession()) {
+      log.info('No local session found - skipping remote check');
+      return null;
+    }
+
     try {
       log.info('Getting current user...');
       
-      const session = await this.getSession();
+      // 2. Race the session check against a timeout
+      // This prevents the app from hanging if Supabase is unreachable
+      const sessionPromise = this.getSession();
+      const timeoutPromise = new Promise<null>((resolve) => 
+        setTimeout(() => {
+          log.warn('Session check timed out');
+          resolve(null);
+        }, 5000)
+      );
+
+      const session = await Promise.race([sessionPromise, timeoutPromise]);
       
       if (!session?.user) {
-        log.info('No session found');
+        log.info('No session found (or timed out)');
+        // If we had a token but validation failed/timed out, we should probably clear it
+        // but let's be careful not to log them out on a flakey network.
+        // For now, if it times out, we return null, effectively logging them out in the UI.
         return null;
       }
 
@@ -373,8 +398,14 @@ export class AuthService {
       }
       
       if (session?.user) {
-        const user = await this.getCurrentUser();
-        this.notifyAuthChange(user);
+        // If we get an auth change, we should reload the profile to be safe
+        // but avoid infinite loops if fetch fails
+        try {
+           const user = await this.getCurrentUser();
+           this.notifyAuthChange(user);
+        } catch (e) {
+           log.error('Failed to reload user on auth change', e);
+        }
       } else {
         this.notifyAuthChange(null);
       }
