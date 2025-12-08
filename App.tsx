@@ -126,6 +126,30 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // --- 0. INITIAL LOCATION FETCH (Rider) ---
+  useEffect(() => {
+    if (currentUser?.role === UserRole.RIDER && !pickupCoords) {
+      console.log('[GPS] 📍 Fetching initial user location...');
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude } = position.coords;
+            console.log('[GPS] ✅ Found location:', latitude, longitude);
+            if (isMounted.current) {
+              setPickupCoords({ lat: latitude, lng: longitude });
+              // We keep "Current Location" as text but now it has backing coords
+            }
+          },
+          (error) => {
+            console.warn('[GPS] ⚠️ Could not get location:', error);
+          },
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      }
+    }
+  }, [currentUser, pickupCoords]);
+
+
   // --- 1. TRIP MANAGEMENT (Realtime + Polling Backup) ---
   useEffect(() => {
     if (!currentTrip) {
@@ -514,10 +538,24 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLocationSelect = (name: string, coords: { lat: number, lng: number }) => {
+  // --- LOCATION SELECTION HANDLER ---
+  const handleLocationSelect = async (name: string, coords: { lat: number, lng: number }) => {
     console.log('[App] 📍 Location selected:', name);
     setDestinationInput(name);
     setDestinationCoords(coords);
+    
+    // Optionally reverse geocode if the name is just coordinates
+    if (name.includes('Selected Location')) {
+       try {
+         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`);
+         const data = await res.json();
+         if (data && data.display_name) {
+           setDestinationInput(data.display_name.split(',')[0]); // Shorten address
+         }
+       } catch (err) {
+         console.warn('Reverse geocode failed:', err);
+       }
+    }
   };
 
   // --- Call Handlers ---
