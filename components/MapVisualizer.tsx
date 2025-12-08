@@ -1,418 +1,414 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
-import L, { LatLngTuple, Marker as LeafletMarker } from 'leaflet';
-import { Location, UserRole } from '../types';
-import { Search, X, MapPin, Navigation2 } from 'lucide-react';
+import { RealtimeChannel } from '@supabase/supabase-js';
+import { supabaseClient } from './supabaseClient';
 import { INITIAL_MAP_CENTER } from '../constants';
-import 'leaflet/dist/leaflet.css';
+import { Trip, TripStatus } from '../types';
 
-// --- CRITICAL FIX 4: Fix Leaflet default marker icons ---
-// This is necessary in many modern React/Webpack setups
-if ((L.Icon.Default.prototype as any)._getIconUrl) { // FIX: Added conditional check
-  delete (L.Icon.Default.prototype as any)._getIconUrl;
-}
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-});
+type SubscriptionCallback = (payload: any) => void;
 
-interface MapVisualizerProps {
-  role: UserRole;
-  driverLocation?: Location;
-  pickup?: string;
-  destination?: string;
-  isSearching?: boolean;
-  onLocationSelect?: (locationName: string, coords: { lat: number; lng: number }) => void;
-  pickupCoords?: { lat: number; lng: number };
-  destinationCoords?: { lat: number; lng: number };
-}
+class SupabaseService {
+  private channels: Map<string, RealtimeChannel> = new Map();
+  private locationInterval: any = null;
 
-interface NominatimResult {
-  display_name: string;
-  lat: string;
-  lon: string;
-}
+  /**
+   * Set driver online status
+   */
+  async setDriverOnline(driverId: string, isOnline: boolean) {
+    try {
+      const { error } = await supabaseClient
+        .from('users')
+        .update({ is_online: isOnline })
+        .eq('id', driverId);
 
-// Custom Icon for Driver
-const driverIcon = new L.Icon({
-  iconUrl: '/car-icon.png', // Assuming you have a small car icon image
-  iconSize: [32, 32],
-  iconAnchor: [16, 16], // center the icon
-  popupAnchor: [0, -16]
-});
-
-// Custom Icon for Pickup
-const pickupIcon = new L.Icon({
-  iconUrl: '/pickup-icon.png',
-  iconSize: [32, 32],
-  iconAnchor: [16, 32],
-});
-
-// Custom Icon for Destination
-const destinationIcon = new L.Icon({
-  iconUrl: '/destination-icon.png',
-  iconSize: [32, 32],
-  iconAnchor: [16, 32],
-});
-
-
-/**
- * Subcomponent to handle map movement, coordinate processing, and routing.
- */
-const MapUpdater: React.FC<{ 
-  pickupCoords: { lat: number; lng: number } | undefined;
-  destinationCoords: { lat: number; lng: number } | undefined;
-  driverLocation: Location | undefined;
-  isSearching: boolean;
-}> = React.memo(({ pickupCoords, destinationCoords, driverLocation, isSearching }) => {
-  const map = useMap();
-  const routeRef = useRef<LatLngTuple[]>([]);
-  const driverMarkerRef = useRef<LeafletMarker | null>(null);
-
-  // 1. Fit bounds to show both pickup and destination
-  useEffect(() => {
-    const points: LatLngTuple[] = [];
-
-    if (pickupCoords) {
-      points.push([pickupCoords.lat, pickupCoords.lng]);
-    }
-    if (destinationCoords) {
-      points.push([destinationCoords.lat, destinationCoords.lng]);
-    }
-
-    if (points.length > 0) {
-      // Add a small padding to the bounds
-      map.fitBounds(points, { padding: [50, 50], maxZoom: 15, animate: true, duration: 1.5 });
-    } else if (driverLocation) {
-       // If only driver is present (e.g., rider viewing driver's location before booking)
-       map.setView([driverLocation.lat, driverLocation.lng], 16, { animate: true, duration: 1.5 });
-    }
-
-  }, [map, pickupCoords, destinationCoords, driverLocation]);
-
-
-  // 2. Update Driver Marker position and bearing
-  useEffect(() => {
-    if (driverLocation) {
-      const { lat, lng, bearing } = driverLocation;
-      const latlng: LatLngTuple = [lat, lng];
-
-      if (!driverMarkerRef.current) {
-        // Create marker if it doesn't exist
-        driverMarkerRef.current = L.marker(latlng, { 
-          icon: driverIcon, 
-          rotationAngle: bearing || 0 // Use a leaflet plugin for rotation
-        }).addTo(map);
-        // Map.panTo(latlng, { animate: true, duration: 1 }); // Center on driver initially
-      } else {
-        // Update position and rotation
-        driverMarkerRef.current.setLatLng(latlng);
-        // Assuming L.marker supports rotation through a plugin or custom implementation
-        if ((driverMarkerRef.current as any).setRotationAngle) {
-          (driverMarkerRef.current as any).setRotationAngle(bearing || 0);
-        }
+      if (error) {
+        console.error('[Supabase] ❌ Failed to update driver online status:', error);
       }
-      
-      // Keep map centered on driver if searching
-      if (isSearching) {
-        map.panTo(latlng, { animate: true, duration: 0.5 });
-      }
-    } else if (driverMarkerRef.current) {
-      // Remove marker if driver location is cleared
-      map.removeLayer(driverMarkerRef.current);
-      driverMarkerRef.current = null;
+    } catch (error) {
+      console.error('[Supabase] ❌ Error updating driver online status:', error);
     }
-    
-  }, [map, driverLocation, isSearching]);
-  
-  // 3. Routing (Placeholder - Real routing uses external API or service)
-  useEffect(() => {
-    // In a real app, this would call a routing API (e.g., OSRM, GraphHopper)
-    // to get a Polyline of coordinates for the route.
-    if (pickupCoords && destinationCoords) {
-      // Dummy route for visualization
-      routeRef.current = [
-        [pickupCoords.lat, pickupCoords.lng],
-        [destinationCoords.lat, destinationCoords.lng],
-      ] as LatLngTuple[];
-    } else {
-      routeRef.current = [];
-    }
-  }, [pickupCoords, destinationCoords]);
-
-  return (
-    <>
-      {/* Route Polyline (will be updated by the useEffect hook) */}
-      <Polyline positions={routeRef.current} color="#059669" weight={6} opacity={0.7} />
-
-      {/* Pickup Marker */}
-      {pickupCoords && (
-        <Marker position={[pickupCoords.lat, pickupCoords.lng]} icon={pickupIcon}>
-          <Popup>Pickup Location</Popup>
-        </Marker>
-      )}
-
-      {/* Destination Marker */}
-      {destinationCoords && (
-        <Marker position={[destinationCoords.lat, destinationCoords.lng]} icon={destinationIcon}>
-          <Popup>Destination</Popup>
-        </Marker>
-      )}
-    </>
-  );
-});
-
-// --- Main MapVisualizer Component ---
-
-// FIX 17: Memoize MapVisualizer to prevent excessive re-renders
-export const MapVisualizer: React.FC<MapVisualizerProps> = React.memo(({
-  role,
-  driverLocation,
-  pickup,
-  destination,
-  isSearching,
-  onLocationSelect,
-  pickupCoords: propPickupCoords,
-  destinationCoords: propDestinationCoords,
-}) => {
-  
-  // Local state for coordinates if not passed as props (e.g., rider only has location names)
-  const [localPickupCoords, setLocalPickupCoords] = useState<{ lat: number; lng: number } | undefined>(propPickupCoords);
-  const [localDestCoords, setLocalDestCoords] = useState<{ lat: number; lng: number } | undefined>(propDestinationCoords);
-  
-  // State for geocoded results
-  const [geocodedDest, setGeocodedDest] = useState<{ lat: number; lng: number, name: string } | null>(null);
-
-  // Search Bar State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<NominatimResult[]>([]);
-  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
-  const [isSearchVisible, setIsSearchVisible] = useState(false);
-  const searchTimeoutRef = useRef<NodeJS.Timeout>();
-
-  const finalPickupCoords = propPickupCoords || localPickupCoords;
-  const finalDestinationCoords = propDestinationCoords || localDestCoords || (geocodedDest ? { lat: geocodedDest.lat, lng: geocodedDest.lng } : undefined);
-  
-  // --- Auto-Geocoding for Destination Input ---
-  // If destination is a string but coords are missing, try to geocode it automatically
-  useEffect(() => {
-    // Use geocodedDest in dependency array (Fix 5)
-    if (destination && !propDestinationCoords && !localDestCoords && !geocodedDest) {
-      console.log(`[Geocode] 🔍 Attempting to geocode: ${destination}`);
-      
-      const geocode = async () => {
-        try {
-          const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destination)}&countrycodes=ng&limit=1`,
-            {
-              headers: {
-                'User-Agent': 'Adaidaita/1.0 (Geocode)' // CRITICAL FIX 6: Added User-Agent
-              }
-            }
-          );
-          const data: NominatimResult[] = await response.json();
-          
-          if (data && data.length > 0) {
-            const result = data[0];
-            const coords = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
-            console.log('[Geocode] ✅ Found coordinates:', coords);
-            setGeocodedDest({ ...coords, name: result.display_name });
-          } else {
-            console.log('[Geocode] ❌ No coordinates found for destination');
-          }
-        } catch (error) {
-          console.error('[Geocode] ❌ Geocoding error:', error);
-        }
-      };
-
-      // Simple debounce to prevent rapid fire geocoding
-      const timer = setTimeout(geocode, 1000); 
-
-      return () => clearTimeout(timer);
-    }
-  }, [destination, propDestinationCoords, localDestCoords, geocodedDest]); // CRITICAL FIX 5: Added geocodedDest
-
-  // --- Location Search Handler (Nominatim) ---
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
-
-    if (query.length < 3) {
-      setSearchResults([]);
-      return;
-    }
-
-    setIsSearchingLocation(true);
-    
-    searchTimeoutRef.current = setTimeout(async () => {
-      try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=ng&limit=5`,
-          {
-            headers: {
-              'User-Agent': 'Adaidaita/1.0 (Search)' // CRITICAL FIX 6: Added User-Agent
-            }
-          }
-        );
-        const data: NominatimResult[] = await response.json();
-        setSearchResults(data);
-      } catch (error) {
-        console.error('Search failed:', error);
-        setSearchResults([]);
-      } finally {
-        setIsSearchingLocation(false);
-      }
-    }, 500); // 500ms debounce
-  };
-
-  const handleSearchSelect = (result: NominatimResult) => {
-    const coords = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
-    if (onLocationSelect) {
-      onLocationSelect(result.display_name, coords);
-    }
-    // Clear search state and close modal/panel
-    setSearchQuery('');
-    setSearchResults([]);
-    setIsSearchVisible(false);
-    setGeocodedDest(null); // Clear geocoded state to allow new geocoding if needed
-  };
-  
-  // --- Determine Map Center ---
-  let initialCenter: LatLngTuple;
-  if (finalPickupCoords) {
-    initialCenter = [finalPickupCoords.lat, finalPickupCoords.lng];
-  } else if (driverLocation) {
-    initialCenter = [driverLocation.lat, driverLocation.lng];
-  } else {
-    // Default fallback (e.g., center of Nigeria)
-    initialCenter = INITIAL_MAP_CENTER as LatLngTuple; 
   }
-  
-  // --- Main Render ---
-  return (
-    <div className="w-full h-full relative">
-      <MapContainer 
-        center={initialCenter} 
-        zoom={13} 
-        style={{ height: '100%', width: '100%' }}
-        scrollWheelZoom={true}
-        className="z-0"
-      >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        
-        <MapUpdater 
-          pickupCoords={finalPickupCoords}
-          destinationCoords={finalDestinationCoords}
-          driverLocation={driverLocation}
-          isSearching={isSearching || false}
-        />
-        
-      </MapContainer>
 
-      {/* Floating Search Button/Bar */}
-      {role === UserRole.RIDER && !finalDestinationCoords && (
-        <div className="absolute top-4 left-4 right-4 z-10 md:left-auto md:right-8 md:w-96">
-          {!isSearchVisible ? (
-            <button 
-              onClick={() => setIsSearchVisible(true)}
-              className="w-full bg-white rounded-xl shadow-xl p-4 flex items-center justify-between text-zinc-600 hover:shadow-2xl transition-all"
-            >
-              <span className="font-semibold text-zinc-900 truncate">{destination || 'Where are you going?'}</span>
-              <Search size={20} className="text-emerald-600" />
-            </button>
-          ) : (
-            <div className="bg-white rounded-xl shadow-2xl p-2">
-              <div className="flex items-center border-b border-zinc-100 p-2">
-                <Search size={20} className="text-zinc-400 mr-2" />
-                <input
-                  type="text"
-                  placeholder="Enter destination..."
-                  value={searchQuery}
-                  onChange={(e) => handleSearch(e.target.value)}
-                  className="flex-1 border-none outline-none focus:ring-0 text-zinc-900"
-                />
-                <button 
-                  onClick={() => setIsSearchVisible(false)}
-                  className="p-1 text-zinc-500 hover:text-zinc-800 transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
+  /**
+   * Subscribe to available trips (for Drivers)
+   */
+  subscribeToAvailableTrips(callback: (trip: Trip) => void) {
+    console.log('[Supabase] 📡 Subscribing to available trips...');
+    const channelName = 'available-trips';
 
-              {/* Search Results */}
-              <div className="max-h-64 overflow-y-auto">
-                {isSearchingLocation && (
-                  <div className="flex items-center justify-center p-4">
-                    <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mr-2"></div>
-                    <span className="text-sm text-zinc-500">Searching...</span>
-                  </div>
-                )}
-                
-                {!isSearchingLocation && searchResults.map((result, idx) => (
-                  <button 
-                    key={idx}
-                    onClick={() => handleSearchSelect(result)}
-                    className="w-full text-left px-4 py-3 text-sm text-zinc-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors border-b border-zinc-50 last:border-0 flex items-center group"
-                  >
-                    <div className="p-1.5 bg-zinc-100 rounded-full mr-3 group-hover:bg-emerald-100 transition-colors">
-                      <MapPin size={12} className="text-zinc-500 group-hover:text-emerald-600" />
-                    </div>
-                    <span className="truncate">{result.display_name}</span>
-                  </button>
-                ))}
-                
-                {!isSearchingLocation && searchResults.length === 0 && searchQuery.length >= 3 && (
-                  <div className="px-4 py-8 text-center">
-                    <p className="text-xs text-zinc-400 italic">No locations found</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Add pulse animation keyframes for location update visual feedback */}
-      <style>{`
-        @keyframes pulse-loc {
-          0% {
-            box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.4);
-          }
-          70% {
-            box-shadow: 0 0 0 10px rgba(5, 150, 105, 0);
-          }
-          100% {
-            box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
+    const channel = supabaseClient
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'trips',
+          filter: `status=eq.${TripStatus.SEARCHING}`
+        },
+        async (payload) => {
+          console.log('[Supabase] 🔔 New trip request received:', payload);
+          if (payload.new) {
+             const fullTrip = await this.getTripById(payload.new.id);
+             if (fullTrip) {
+               callback(fullTrip);
+             }
           }
         }
-      `}</style>
-    </div>
-  );
-}, (prevProps, nextProps) => {
-  // FIX 17: Custom comparison to prevent re-render on irrelevant state changes
-  // Only re-render if:
-  // 1. Coordinates change (pickup/destination)
-  // 2. Driver location changes
-  // 3. Trip status changes (which affects isSearching)
-  // 4. Role changes
-  
-  const areCoordsEqual = (c1?: {lat: number, lng: number}, c2?: {lat: number, lng: number}) => 
-    c1?.lat === c2?.lat && c1?.lng === c2?.lng;
-    
-  const areLocationsEqual = (l1?: Location, l2?: Location) => 
-    l1?.lat === l2?.lat && l1?.lng === l2?.lng && l1?.bearing === l2?.bearing;
+      )
+      .subscribe();
 
-  return prevProps.role === nextProps.role &&
-         areCoordsEqual(prevProps.pickupCoords, nextProps.pickupCoords) &&
-         areCoordsEqual(prevProps.destinationCoords, nextProps.destinationCoords) &&
-         areLocationsEqual(prevProps.driverLocation, nextProps.driverLocation) &&
-         prevProps.isSearching === nextProps.isSearching &&
-         prevProps.pickup === nextProps.pickup &&
-         prevProps.destination === nextProps.destination;
-});
+    this.channels.set(channelName, channel);
+
+    return {
+      unsubscribe: () => {
+        console.log(`[Supabase] 🔌 Unsubscribing from ${channelName}`);
+        supabaseClient.removeChannel(channel);
+        this.channels.delete(channelName);
+      }
+    };
+  }
+
+  /**
+   * Subscribe to real-time updates for a specific trip and driver locations
+   */
+  subscribe(channelName: string, callback: SubscriptionCallback) {
+    console.log(`[Supabase] 📡 Subscribing to ${channelName}`);
+    
+    if (this.channels.has(channelName)) {
+      supabaseClient.removeChannel(this.channels.get(channelName)!);
+      this.channels.delete(channelName);
+    }
+
+    const channel = supabaseClient
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'trips'
+        },
+        async (payload) => {
+          if (payload.new) {
+            const trip = await this.getTripById(payload.new.id);
+            if (trip) {
+              callback({
+                event: 'trip_updated',
+                payload: { trip }
+              });
+            }
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'driver_locations'
+        },
+        (payload) => {
+          if (payload.new) {
+            callback({
+              event: 'location_update',
+              payload: {
+                lat: parseFloat(payload.new.lat),
+                lng: parseFloat(payload.new.lng),
+                bearing: parseFloat(payload.new.bearing || 0)
+              }
+            });
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log(`[Supabase] Channel ${channelName} status:`, status);
+      });
+
+    this.channels.set(channelName, channel);
+
+    return {
+      unsubscribe: () => {
+        console.log(`[Supabase] 🔌 Unsubscribing from ${channelName}`);
+        const ch = this.channels.get(channelName);
+        if (ch) {
+          supabaseClient.removeChannel(ch);
+          this.channels.delete(channelName);
+        }
+      }
+    };
+  }
+
+  /**
+   * Create a new trip request
+   */
+  async createTrip(
+    riderId: string, 
+    pickup: string, 
+    destination: string,
+    pickupCoords?: { lat: number, lng: number },
+    destinationCoords?: { lat: number, lng: number }
+  ): Promise<Trip> {
+    try {
+      console.log('[Supabase] 🚗 Creating trip...', { riderId, pickup, destination, pickupCoords });
+      
+      const fare = Math.floor(Math.random() * 2000) + 500;
+      
+      // Use real coords if available, otherwise fallback to constants (or 0,0)
+      const pLat = pickupCoords?.lat || INITIAL_MAP_CENTER.lat;
+      const pLng = pickupCoords?.lng || INITIAL_MAP_CENTER.lng;
+      const dLat = destinationCoords?.lat || null;
+      const dLng = destinationCoords?.lng || null;
+
+      const { data, error } = await supabaseClient
+        .from('trips')
+        .insert({
+          rider_id: riderId,
+          pickup_location: pickup,
+          destination_location: destination,
+          status: TripStatus.SEARCHING,
+          fare,
+          pickup_lat: pLat,
+          pickup_lng: pLng,
+          // If you have columns for destination coords in DB, add them here
+          // dest_lat: dLat,
+          // dest_lng: dLng
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[Supabase] ❌ Trip creation failed:', error);
+        throw new Error(`Failed to create trip: ${error.message}`);
+      }
+
+      console.log('[Supabase] ✅ Trip created:', data);
+      
+      const fullTrip = await this.getTripById(data.id);
+      return fullTrip || this.mapTrip(data);
+    } catch (error: any) {
+      console.error('[Supabase] ❌ Create trip error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Driver accepts a trip
+   */
+  async acceptTrip(tripId: string, driverId: string): Promise<Trip | null> {
+    try {
+      console.log('[Supabase] 🤝 Accepting trip...', { tripId, driverId });
+
+      const { data, error } = await supabaseClient
+        .from('trips')
+        .update({
+          driver_id: driverId,
+          status: TripStatus.ACCEPTED,
+          accepted_at: new Date().toISOString()
+        })
+        .eq('id', tripId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[Supabase] ❌ Accept trip failed:', error);
+        return null;
+      }
+
+      console.log('[Supabase] ✅ Trip accepted:', data);
+      
+      // Get the trip to know where to start the driver
+      const trip = await this.getTripById(tripId);
+      const startLat = trip?.pickupCoords?.lat || INITIAL_MAP_CENTER.lat;
+      const startLng = trip?.pickupCoords?.lng || INITIAL_MAP_CENTER.lng;
+
+      await this.initializeDriverLocation(driverId, startLat, startLng);
+      this.startLocationUpdates(driverId, startLat, startLng);
+
+      return trip;
+    } catch (error) {
+      console.error('[Supabase] ❌ Accept trip error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Update trip status
+   */
+  async updateTripStatus(tripId: string, status: TripStatus): Promise<Trip | null> {
+    try {
+      const updateData: any = { status };
+      
+      if (status === TripStatus.ACCEPTED) {
+        updateData.accepted_at = new Date().toISOString();
+      } else if (status === TripStatus.IN_PROGRESS) {
+        updateData.started_at = new Date().toISOString();
+      } else if (status === TripStatus.COMPLETED) {
+        updateData.completed_at = new Date().toISOString();
+        this.stopLocationUpdates();
+      }
+
+      const { data, error } = await supabaseClient
+        .from('trips')
+        .update(updateData)
+        .eq('id', tripId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[Supabase] ❌ Status update failed:', error);
+        return null;
+      }
+
+      return await this.getTripById(tripId);
+    } catch (error) {
+      console.error('[Supabase] ❌ Update trip status error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get trip by ID
+   */
+  async getTripById(tripId: string): Promise<Trip | null> {
+    try {
+      const { data, error } = await supabaseClient
+        .from('trips')
+        .select(`
+          *,
+          rider:rider_id(id, name, email, avatar_url, rating),
+          driver:driver_id(id, name, email, avatar_url, vehicle_model, vehicle_plate, rating)
+        `)
+        .eq('id', tripId)
+        .single();
+
+      if (error) {
+        console.error('[Supabase] ❌ Get trip failed:', error);
+        return null;
+      }
+      
+      return this.mapTrip(data);
+    } catch (error) {
+      console.error('[Supabase] ❌ Get trip by ID error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Initialize driver location (near pickup point)
+   */
+  private async initializeDriverLocation(driverId: string, lat?: number, lng?: number) {
+    try {
+      const startLat = (lat || INITIAL_MAP_CENTER.lat) - 0.002;
+      const startLng = (lng || INITIAL_MAP_CENTER.lng) - 0.002;
+
+      const { error } = await supabaseClient
+        .from('driver_locations')
+        .upsert({
+          driver_id: driverId,
+          lat: startLat,
+          lng: startLng,
+          bearing: 45,
+          updated_at: new Date().toISOString()
+        });
+
+      if (error) {
+        console.error('[Supabase] ❌ Initialize location failed:', error);
+      }
+    } catch (error) {
+      console.error('[Supabase] ❌ Initialize driver location error:', error);
+    }
+  }
+
+  /**
+   * Start simulating driver movement towards pickup
+   */
+  private startLocationUpdates(driverId: string, startLat?: number, startLng?: number) {
+    if (this.locationInterval) {
+      clearInterval(this.locationInterval);
+    }
+
+    let lat = (startLat || INITIAL_MAP_CENTER.lat) - 0.002;
+    let lng = (startLng || INITIAL_MAP_CENTER.lng) - 0.002;
+    let heading = 45;
+
+    this.locationInterval = setInterval(async () => {
+      try {
+        const speed = 0.00015;
+        const steering = (Math.random() - 0.5) * 15;
+        heading = (heading + steering + 360) % 360;
+
+        const rad = (90 - heading) * (Math.PI / 180);
+        lat += Math.sin(rad) * speed;
+        lng += Math.cos(rad) * speed;
+
+        await supabaseClient
+          .from('driver_locations')
+          .upsert({
+            driver_id: driverId,
+            lat: lat,
+            lng: lng,
+            bearing: heading,
+            updated_at: new Date().toISOString()
+          });
+      } catch (error) {
+        // Ignore errors
+      }
+    }, 2000);
+  }
+
+  private stopLocationUpdates() {
+    if (this.locationInterval) {
+      clearInterval(this.locationInterval);
+      this.locationInterval = null;
+    }
+  }
+
+  /**
+   * Map database trip to Trip type
+   */
+  private mapTrip(data: any): Trip {
+    return {
+      id: data.id,
+      riderId: data.rider_id,
+      driverId: data.driver_id,
+      pickup: data.pickup_location,
+      destination: data.destination_location,
+      status: data.status,
+      fare: data.fare,
+      pickupCoords: (data.pickup_lat && data.pickup_lng) ? {
+         lat: data.pickup_lat,
+         lng: data.pickup_lng
+      } : undefined,
+      driverLocation: data.driver_locations ? {
+        lat: data.driver_locations.lat,
+        lng: data.driver_locations.lng,
+        bearing: data.driver_locations.bearing
+      } : undefined,
+      rider: data.rider ? {
+        name: data.rider.name,
+        avatarUrl: data.rider.avatar_url,
+        rating: data.rider.rating
+      } : undefined,
+      driver: data.driver ? {
+        name: data.driver.name,
+        avatarUrl: data.driver.avatar_url,
+        vehicleModel: data.driver.vehicle_model,
+        vehiclePlate: data.driver.vehicle_plate,
+        rating: data.driver.rating
+      } : undefined
+    };
+  }
+
+  /**
+   * Cleanup all subscriptions
+   */
+  cleanup() {
+    console.log('[Supabase] 🧹 Cleaning up subscriptions...');
+    this.channels.forEach((channel, name) => {
+      supabaseClient.removeChannel(channel);
+    });
+    this.channels.clear();
+    this.stopLocationUpdates();
+  }
+}
+
+export const supabase = new SupabaseService();
