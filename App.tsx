@@ -477,7 +477,9 @@ const App: React.FC = () => {
       setCurrentTrip(trip);
 
       // Trigger notification for available drivers
-      NotificationService.sendTripNotification(trip);
+      console.log('[App] 📣 Sending trip notification to drivers...');
+      await NotificationService.sendTripNotification(trip);
+      console.log('[App] ✅ Trip notification sent successfully');
 
 
     } catch (error: any) {
@@ -502,6 +504,12 @@ const App: React.FC = () => {
       if (trip) {
         console.log('[App] ✅ Trip accepted successfully');
         setCurrentTrip(trip);
+        
+        // Send notification to rider that trip was accepted
+        if (trip.riderId) {
+          console.log('[App] 📣 Sending acceptance notification to rider...');
+          await NotificationService.sendCallNotification(trip.riderId, currentUser.name || 'Driver');
+        }
       } else {
         // Trip was taken by another driver
         console.log('[App] ⚠️ Trip no longer available');
@@ -522,6 +530,16 @@ const App: React.FC = () => {
     // Handle ending trip
     if (status === TripStatus.IDLE) {
       console.log('[App] 🏁 Ending trip');
+      
+      // Send completion notification to the other user
+      if (currentTrip.riderId && currentUser?.role === UserRole.DRIVER) {
+        console.log('[App] 📣 Sending trip completion notification to rider...');
+        await NotificationService.sendTripCompletedNotification(currentTrip.riderId, currentUser.name || 'Driver');
+      } else if (currentTrip.driverId && currentUser?.role === UserRole.RIDER) {
+        console.log('[App] 📣 Sending trip completion notification to driver...');
+        await NotificationService.sendTripCompletedNotification(currentTrip.driverId, currentUser.name || 'Rider');
+      }
+      
       if (rtcServiceRef.current) {
         rtcServiceRef.current.destroy();
         rtcServiceRef.current = null;

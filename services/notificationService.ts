@@ -129,16 +129,53 @@ export class NotificationService {
             const { data, error } = await supabaseClient.functions.invoke('push-notifications', {
                 body: {
                     tokens: [user.fcm_token],
-                    title: 'Incoming Call',
-                    body: `${callerName} is calling you...`,
-                    data: { callerName, type: 'incoming_call' }
+                    title: 'Trip Accepted',
+                    body: `${callerName} has accepted your trip request!`,
+                    data: { callerName, type: 'trip_accepted' }
                 }
             });
 
             if (error) throw error;
-            console.log('[NotificationService] Call notification sent successfully:', data);
+            console.log('[NotificationService] Trip accepted notification sent successfully:', data);
         } catch (err) {
-            console.error('[NotificationService] Failed to send call notification:', err);
+            console.error('[NotificationService] Failed to send trip accepted notification:', err);
+        }
+    }
+
+    /**
+     * Trigger a trip completion notification via Supabase Edge Function.
+     */
+    static async sendTripCompletedNotification(targetUserId: string, driverName: string) {
+        console.log(`[NotificationService] ✅ Triggering trip completed notification for user ${targetUserId}`);
+
+        try {
+            // Fetch the target user's FCM token
+            const { data: user, error: fetchError } = await supabaseClient
+                .from('users')
+                .select('fcm_token')
+                .eq('id', targetUserId)
+                .single();
+
+            if (fetchError) throw fetchError;
+
+            if (!user?.fcm_token) {
+                console.warn('[NotificationService] Target user has no FCM token.');
+                return;
+            }
+
+            const { data, error } = await supabaseClient.functions.invoke('push-notifications', {
+                body: {
+                    tokens: [user.fcm_token],
+                    title: 'Trip Completed',
+                    body: `Your trip with ${driverName} has been completed. Thank you for riding with us!`,
+                    data: { driverName, type: 'trip_completed' }
+                }
+            });
+
+            if (error) throw error;
+            console.log('[NotificationService] Trip completed notification sent successfully:', data);
+        } catch (err) {
+            console.error('[NotificationService] Failed to send trip completed notification:', err);
         }
     }
 }
