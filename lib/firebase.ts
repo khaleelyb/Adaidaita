@@ -12,5 +12,15 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const messaging: Messaging = getMessaging(app);
+
+let messaging: Messaging;
+try {
+  messaging = getMessaging(app);
+  console.log('✅ Firebase Messaging initialized');
+} catch (error) {
+  console.error('❌ Failed to initialize Firebase Messaging:', error);
+  // Fallback - the messaging object will be undefined if service workers aren't available
+}
+
+export { messaging };
 export default app;

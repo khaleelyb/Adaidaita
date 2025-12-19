@@ -6,28 +6,69 @@ export class NotificationService {
     static async requestPermissionAndGetToken(userId: string) {
         try {
             console.log('[NotificationService] Requesting permission...');
+            
+            // Check if notifications are supported
+            if (!('Notification' in window)) {
+                console.warn('[NotificationService] Notifications not supported in this browser');
+                return null;
+            }
+
+            // If already granted, just get the token
+            if (Notification.permission === 'granted') {
+                console.log('[NotificationService] Permission already granted');
+                return await this.getFCMToken(userId);
+            }
+
+            // If previously denied, don't ask again
+            if (Notification.permission === 'denied') {
+                console.warn('[NotificationService] Notification permission previously denied');
+                return null;
+            }
+
+            // Request permission
             const permission = await Notification.requestPermission();
+            console.log('[NotificationService] Permission response:', permission);
 
             if (permission === 'granted') {
                 console.log('[NotificationService] Notification permission granted.');
-
-                // Get FCM token
-                // Use the default service worker location since it's in the root
-                const token = await getToken(messaging);
-
-                if (token) {
-                    console.log('[NotificationService] FCM Token obtained:', token);
-                    // Save token to Supabase user profile for backend to use
-                    await this.saveTokenToSupabase(userId, token);
-                    return token;
-                } else {
-                    console.warn('[NotificationService] No registration token available.');
-                }
+                return await this.getFCMToken(userId);
             } else {
                 console.warn('[NotificationService] Notification permission denied.');
+                return null;
             }
         } catch (error) {
-            console.error('[NotificationService] Error getting token:', error);
+            console.error('[NotificationService] Error getting permission:', error);
+            return null;
+        }
+    }
+
+    private static async getFCMToken(userId: string) {
+        try {
+            console.log('[NotificationService] Getting FCM token...');
+            
+            // Ensure service worker is registered
+            if ('serviceWorker' in navigator) {
+                const registration = await navigator.serviceWorker.ready;
+                console.log('[NotificationService] Service worker ready:', registration);
+            }
+
+            const token = await getToken(messaging, {
+                vapidKey: 'BBf-LAYrwI1fFZIqaVLHGDGWPjPIwJfhOquGZa3jU9AjXlL6-F5nnQ3kj8wl3_P_oKtDHZP85QZCHaJZFv08cFY',
+                serviceWorkerRegistration: await navigator.serviceWorker.ready
+            });
+
+            if (token) {
+                console.log('[NotificationService] FCM Token obtained:', token.substring(0, 20) + '...');
+                // Save token to Supabase
+                await this.saveTokenToSupabase(userId, token);
+                return token;
+            } else {
+                console.warn('[NotificationService] No registration token available.');
+                return null;
+            }
+        } catch (error) {
+            console.error('[NotificationService] Error getting FCM token:', error);
+            return null;
         }
     }
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserRole } from '../types';
 import { authService } from '../services/auth';
+import { NotificationService } from '../services/notificationService';
 import { Button } from './Button';
 import { Mail, Lock, User as UserIcon, Car, AlertCircle, CheckCircle } from 'lucide-react';
 
@@ -45,15 +46,31 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
     setError('');
     try {
       const user = await authService.getCurrentUser();
-      if (user) {
-        setUserInfoSaved(true);
-        setSuccess('User information saved successfully! ✓');
-        setTimeout(() => {
-          if (isMounted.current) onSuccess();
-        }, 1000);
-      } else {
-        setError('Failed to save user information. Please try again.');
+      if (!user) {
+        setError('User not found. Please try again.');
+        setSavingUserInfo(false);
+        return;
       }
+
+      // Request notification permission
+      console.log('[AuthModal] Requesting notification permission for user:', user.id);
+      const token = await NotificationService.requestPermissionAndGetToken(user.id);
+      
+      if (token) {
+        console.log('[AuthModal] Notification permission granted and token obtained');
+        setSuccess('User information saved & notifications enabled! ✓');
+      } else if (Notification.permission === 'denied') {
+        console.warn('[AuthModal] Notification permission was denied');
+        setSuccess('User information saved (notifications disabled) ✓');
+      } else {
+        console.log('[AuthModal] Notification permission skipped');
+        setSuccess('User information saved! ✓');
+      }
+      
+      setUserInfoSaved(true);
+      setTimeout(() => {
+        if (isMounted.current) onSuccess();
+      }, 1000);
     } catch (err: any) {
       console.error('[AuthModal] Error saving user info:', err);
       setError(err.message || 'Failed to save user information');
