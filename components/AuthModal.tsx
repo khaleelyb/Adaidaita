@@ -17,6 +17,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [savingUserInfo, setSavingUserInfo] = useState(false);
+  const [userInfoSaved, setUserInfoSaved] = useState(false);
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -36,6 +38,30 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
     }
     setError('');
     setSuccess('Test credentials filled. You can now sign in.');
+  };
+
+  const handleSaveUserInfo = async () => {
+    setSavingUserInfo(true);
+    setError('');
+    try {
+      const user = await authService.getCurrentUser();
+      if (user) {
+        setUserInfoSaved(true);
+        setSuccess('User information saved successfully! ✓');
+        setTimeout(() => {
+          if (isMounted.current) onSuccess();
+        }, 1000);
+      } else {
+        setError('Failed to save user information. Please try again.');
+      }
+    } catch (err: any) {
+      console.error('[AuthModal] Error saving user info:', err);
+      setError(err.message || 'Failed to save user information');
+    } finally {
+      if (isMounted.current) {
+        setSavingUserInfo(false);
+      }
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -226,6 +252,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
                 : (isLogin ? 'Sign In' : 'Create Account')
               }
             </Button>
+
+            {/* Save User Info Button (shown after successful sign in) */}
+            {success && isLogin && !userInfoSaved && (
+              <Button 
+                type="button" 
+                fullWidth 
+                isLoading={savingUserInfo} 
+                className="h-12 text-base bg-emerald-600 hover:bg-emerald-700"
+                onClick={handleSaveUserInfo}
+              >
+                {savingUserInfo ? 'Saving User Info...' : 'Save User Information'}
+              </Button>
+            )}
 
             {/* Toggle Login/Signup */}
             <div className="text-center">
