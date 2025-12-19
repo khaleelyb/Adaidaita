@@ -95,10 +95,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
       if (isLogin) {
         await authService.signIn(email, password);
         if (isMounted.current) {
-          setSuccess('Sign in successful! Loading your account...');
-          setTimeout(() => {
-            if (isMounted.current) onSuccess();
-          }, 500);
+          setSuccess('Sign in successful! Please save your user information.');
         }
       } else {
         await authService.signUp(email, password, name, role);
