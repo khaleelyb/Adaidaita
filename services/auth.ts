@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_CONFIG } from '../constants';
 import { User, UserRole } from '../types';
+import { messaging } from '../lib/firebase';
 
 // Use a unique storage key that won't conflict with window.storage
 export const SUPABASE_AUTH_STORAGE_KEY = 'sb-adaidaita-auth';
@@ -61,6 +62,18 @@ export class AuthService {
 
       log.success('User created', { id: authData.user.id });
 
+      // Get FCM token for notifications
+      let fcmToken: string | null = null;
+      try {
+        const { getToken } = await import('firebase/messaging');
+        fcmToken = await getToken(messaging, {
+          vapidKey: 'BBf-LAYrwI1fFZIqaVLHGDGWPjPIwJfhOquGZa3jU9AjXlL6-F5nnQ3kj8wl3_P_oKtDHZP85QZCHaJZFv08cFY'
+        });
+        log.info('FCM token obtained', { token: fcmToken?.substring(0, 20) + '...' });
+      } catch (fcmError) {
+        log.warn('FCM token retrieval failed (may be offline)', fcmError);
+      }
+
       // Create profile - Retrying a few times if needed
       let profileCreated = false;
       let attempts = 0;
@@ -75,7 +88,10 @@ export class AuthService {
               email: authData.user.email!,
               name,
               role,
-              avatar_url: `https://i.pravatar.cc/150?u=${email}`
+              avatar_url: `https://i.pravatar.cc/150?u=${email}`,
+              fcm_token: fcmToken,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
             });
 
           if (profileError) {
@@ -135,6 +151,34 @@ export class AuthService {
         id: data.user.id, 
         email: data.user.email 
       });
+
+      // Get FCM token for notifications
+      let fcmToken: string | null = null;
+      try {
+        const { getToken } = await import('firebase/messaging');
+        fcmToken = await getToken(messaging, {
+          vapidKey: 'BBf-LAYrwI1fFZIqaVLHGDGWPjPIwJfhOquGZa3jU9AjXlL6-F5nnQ3kj8wl3_P_oKtDHZP85QZCHaJZFv08cFY'
+        });
+        log.info('FCM token obtained', { token: fcmToken?.substring(0, 20) + '...' });
+      } catch (fcmError) {
+        log.warn('FCM token retrieval failed (may be offline)', fcmError);
+      }
+
+      // Update user info with last login and FCM token
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({
+          last_login: new Date().toISOString(),
+          fcm_token: fcmToken,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', data.user.id);
+
+      if (updateError) {
+        log.warn('Failed to update user login info', updateError);
+      } else {
+        log.info('User login info updated');
+      }
 
       // Verify profile exists
       setTimeout(() => {
