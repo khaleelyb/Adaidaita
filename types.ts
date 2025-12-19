@@ -47,7 +47,9 @@ export interface Trip {
   status: TripStatus;
   fare: number;
   driverLocation?: Location;
-  
+  pickupCoords?: Location;
+  destinationCoords?: Location;
+
   // Expanded details
   rider?: {
     name: string;

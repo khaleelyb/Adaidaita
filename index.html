@@ -200,28 +200,16 @@
       }
     </style>
     
-    <!-- OneSignal SDK v16 -->
-    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-    <script>
-      window.OneSignalDeferred = window.OneSignalDeferred || [];
-      OneSignalDeferred.push(async function(OneSignal) {
-        await OneSignal.init({
-          appId: "c4cf2adf-2e4c-44d8-abd0-d7536ba28fd6",
-          notifyButton: {
-            enable: true,
-          },
-          allowLocalhostAsSecureOrigin: true,
-        });
-      });
-    </script>
+    <!-- Firebase is handled via modules and firebase-messaging-sw.js -->
+
     
     <!-- Service Worker Registration -->
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/OneSignalSDKWorker.js')
-            .then(registration => console.log('SW registered:', registration))
-            .catch(error => console.log('SW registration failed:', error));
+          navigator.serviceWorker.register('/firebase-messaging-sw.js')
+            .then(registration => console.log('Firebase SW registered:', registration))
+            .catch(error => console.log('Firebase SW registration failed:', error));
         });
       }
     </script>

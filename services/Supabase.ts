@@ -47,10 +47,10 @@ class SupabaseService {
         async (payload) => {
           console.log('[Supabase] 🔔 New trip request received:', payload);
           if (payload.new) {
-             const fullTrip = await this.getTripById(payload.new.id);
-             if (fullTrip) {
-               callback(fullTrip);
-             }
+            const fullTrip = await this.getTripById(payload.new.id);
+            if (fullTrip) {
+              callback(fullTrip);
+            }
           }
         }
       )
@@ -72,7 +72,7 @@ class SupabaseService {
    */
   subscribe(channelName: string, callback: SubscriptionCallback) {
     console.log(`[Supabase] 📡 Subscribing to ${channelName}`);
-    
+
     if (this.channels.has(channelName)) {
       supabaseClient.removeChannel(this.channels.get(channelName)!);
       this.channels.delete(channelName);
@@ -87,7 +87,7 @@ class SupabaseService {
           schema: 'public',
           table: 'trips'
         },
-        async (payload) => {
+        async (payload: any) => {
           if (payload.new) {
             const trip = await this.getTripById(payload.new.id);
             if (trip) {
@@ -106,7 +106,7 @@ class SupabaseService {
           schema: 'public',
           table: 'driver_locations'
         },
-        (payload) => {
+        (payload: any) => {
           if (payload.new) {
             callback({
               event: 'location_update',
@@ -141,17 +141,17 @@ class SupabaseService {
    * Create a new trip request
    */
   async createTrip(
-    riderId: string, 
-    pickup: string, 
+    riderId: string,
+    pickup: string,
     destination: string,
     pickupCoords?: { lat: number, lng: number },
     destinationCoords?: { lat: number, lng: number }
   ): Promise<Trip> {
     try {
       console.log('[Supabase] 🚗 Creating trip...', { riderId, pickup, destination, pickupCoords });
-      
+
       const fare = Math.floor(Math.random() * 2000) + 500;
-      
+
       // Use real coords if available, otherwise fallback to constants (or 0,0)
       const pLat = pickupCoords?.lat || INITIAL_MAP_CENTER.lat;
       const pLng = pickupCoords?.lng || INITIAL_MAP_CENTER.lng;
@@ -181,7 +181,7 @@ class SupabaseService {
       }
 
       console.log('[Supabase] ✅ Trip created:', data);
-      
+
       const fullTrip = await this.getTripById(data.id);
       return fullTrip || this.mapTrip(data);
     } catch (error: any) {
@@ -214,7 +214,7 @@ class SupabaseService {
       }
 
       console.log('[Supabase] ✅ Trip accepted:', data);
-      
+
       // Get the trip to know where to start the driver
       const trip = await this.getTripById(tripId);
       const startLat = trip?.pickupCoords?.lat || INITIAL_MAP_CENTER.lat;
@@ -236,7 +236,7 @@ class SupabaseService {
   async updateTripStatus(tripId: string, status: TripStatus): Promise<Trip | null> {
     try {
       const updateData: any = { status };
-      
+
       if (status === TripStatus.ACCEPTED) {
         updateData.accepted_at = new Date().toISOString();
       } else if (status === TripStatus.IN_PROGRESS) {
@@ -284,7 +284,7 @@ class SupabaseService {
         console.error('[Supabase] ❌ Get trip failed:', error);
         return null;
       }
-      
+
       return this.mapTrip(data);
     } catch (error) {
       console.error('[Supabase] ❌ Get trip by ID error:', error);
@@ -355,7 +355,31 @@ class SupabaseService {
     }, 2000);
   }
 
+  /**
+   * Manually update driver location (for real GPS)
+   */
+  async updateDriverLocation(driverId: string, location: { lat: number, lng: number, bearing: number }) {
+    try {
+      const { error } = await supabaseClient
+        .from('driver_locations')
+        .upsert({
+          driver_id: driverId,
+          lat: location.lat,
+          lng: location.lng,
+          bearing: location.bearing,
+          updated_at: new Date().toISOString()
+        });
+
+      if (error) {
+        console.error('[Supabase] ❌ Update location failed:', error);
+      }
+    } catch (error) {
+      console.error('[Supabase] ❌ Update driver location error:', error);
+    }
+  }
+
   private stopLocationUpdates() {
+
     if (this.locationInterval) {
       clearInterval(this.locationInterval);
       this.locationInterval = null;
@@ -375,8 +399,8 @@ class SupabaseService {
       status: data.status,
       fare: data.fare,
       pickupCoords: (data.pickup_lat && data.pickup_lng) ? {
-         lat: data.pickup_lat,
-         lng: data.pickup_lng
+        lat: data.pickup_lat,
+        lng: data.pickup_lng
       } : undefined,
       driverLocation: data.driver_locations ? {
         lat: data.driver_locations.lat,

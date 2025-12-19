@@ -12,6 +12,8 @@ import { AuthModal } from './components/AuthModal';
 import { BottomNav } from './components/BottomNav';
 import { Account } from './pages/Account';
 import { Services } from './pages/Services';
+import { NotificationService } from './services/notificationService';
+
 
 const App: React.FC = () => {
   // Global State
@@ -20,29 +22,29 @@ const App: React.FC = () => {
   const [availableTrip, setAvailableTrip] = useState<Trip | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
-  
+
   // Navigation State
   const [currentTab, setCurrentTab] = useState('home');
 
   // UI State
   const [pickupInput, setPickupInput] = useState('Current Location');
   const [destinationInput, setDestinationInput] = useState('');
-  
+
   // Coordinates State
-  const [pickupCoords, setPickupCoords] = useState<{lat: number, lng: number} | undefined>(undefined);
-  const [destinationCoords, setDestinationCoords] = useState<{lat: number, lng: number} | undefined>(undefined);
+  const [pickupCoords, setPickupCoords] = useState<{ lat: number, lng: number } | undefined>(undefined);
+  const [destinationCoords, setDestinationCoords] = useState<{ lat: number, lng: number } | undefined>(undefined);
 
   const [isRequesting, setIsRequesting] = useState(false);
   const [requestError, setRequestError] = useState<string | undefined>(undefined);
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
   const [hasIncomingCall, setHasIncomingCall] = useState(false);
-  
+
   // WebRTC State
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const rtcServiceRef = useRef<WebRTCService | null>(null);
-  
+
   // Refs
   const isMounted = useRef(true);
   const authSubscriptionRef = useRef<any>(null);
@@ -54,7 +56,7 @@ const App: React.FC = () => {
   // --- Auth Handlers ---
   useEffect(() => {
     isMounted.current = true;
-    
+
     const initAuth = async () => {
       try {
         console.log('🔍 Starting auth initialization...');
@@ -67,7 +69,7 @@ const App: React.FC = () => {
           }
           return;
         }
-        
+
         // 2. Fallback timeout for UI (in case remote check hangs despite service timeout)
         const timeoutId = setTimeout(() => {
           if (isMounted.current && isAuthLoading) {
@@ -77,7 +79,7 @@ const App: React.FC = () => {
         }, 6000); // Slightly longer than service timeout
 
         const user = await authService.getCurrentUser();
-        
+
         clearTimeout(timeoutId);
 
         if (!isMounted.current) return;
@@ -108,10 +110,10 @@ const App: React.FC = () => {
 
     authSubscriptionRef.current = authService.onAuthStateChange((user) => {
       if (!isMounted.current) return;
-      
+
       console.log('👤 Auth state changed:', user ? user.email : 'Logged out');
       setCurrentUser(user);
-      
+
       if (!user) {
         // Clean up everything on logout
         cleanupAllConnections();
@@ -125,6 +127,20 @@ const App: React.FC = () => {
       }
     };
   }, []);
+
+  // --- 0.1 FCM INITIALIZATION ---
+  useEffect(() => {
+    if (currentUser) {
+      console.log('[App] 🔔 Initializing Firebase Messaging for user:', currentUser.id);
+
+      // Request permission and get token
+      NotificationService.requestPermissionAndGetToken(currentUser.id);
+
+      // Listen for foreground messages
+      NotificationService.listenForMessages();
+    }
+  }, [currentUser?.id]);
+
 
   // --- 0. INITIAL LOCATION FETCH (Rider) ---
   useEffect(() => {
@@ -170,7 +186,7 @@ const App: React.FC = () => {
 
       if (data.event === 'trip_updated') {
         const newTrip = data.payload.trip;
-        
+
         // Prevent stale updates from overwriting recent local changes
         const timeSinceLocalUpdate = Date.now() - lastLocalUpdateRef.current;
         if (timeSinceLocalUpdate < 2000 && newTrip.status !== currentTrip.status) {
@@ -193,12 +209,12 @@ const App: React.FC = () => {
     // Polling fallback for SEARCHING status (most critical phase)
     const shouldPoll = currentTrip.status === TripStatus.SEARCHING;
     let poller: NodeJS.Timeout | null = null;
-    
+
     if (shouldPoll) {
       console.log('[App] 📡 Starting polling fallback for SEARCHING status');
       poller = setInterval(async () => {
         if (!isMounted.current) return;
-        
+
         // Don't poll if we just updated locally
         if (Date.now() - lastLocalUpdateRef.current < 5000) return;
 
@@ -240,14 +256,14 @@ const App: React.FC = () => {
       }
       return;
     }
-    
+
     // Only setup listener for accepted trips or later
     if (currentTrip.status === TripStatus.SEARCHING) {
       return;
     }
 
-    const targetUserId = currentUser.role === UserRole.RIDER 
-      ? currentTrip.driverId 
+    const targetUserId = currentUser.role === UserRole.RIDER
+      ? currentTrip.driverId
       : currentTrip.riderId;
 
     if (!targetUserId) {
@@ -297,7 +313,7 @@ const App: React.FC = () => {
     }
 
     console.log('🚕 Setting up driver mode...');
-    
+
     const setupDriver = async () => {
       try {
         // Mark driver as online
@@ -307,9 +323,9 @@ const App: React.FC = () => {
         // Subscribe to available trips
         driverSubscriptionRef.current = supabase.subscribeToAvailableTrips((trip) => {
           if (!isMounted.current) return;
-          
+
           console.log('[App] 📡 New trip notification:', trip.id);
-          
+
           // Only show if we aren't in a trip AND trip is actually still searching
           if (!currentTrip && trip.status === TripStatus.SEARCHING && !trip.driverId) {
             console.log('[App] ✅ Showing trip to driver');
@@ -343,9 +359,9 @@ const App: React.FC = () => {
   useEffect(() => {
     // Only track if driver in active trip
     if (
-      !currentUser || 
-      currentUser.role !== UserRole.DRIVER || 
-      !currentTrip || 
+      !currentUser ||
+      currentUser.role !== UserRole.DRIVER ||
+      !currentTrip ||
       (currentTrip.status !== TripStatus.ACCEPTED && currentTrip.status !== TripStatus.IN_PROGRESS)
     ) {
       if (watchIdRef.current !== null) {
@@ -362,7 +378,7 @@ const App: React.FC = () => {
       watchIdRef.current = navigator.geolocation.watchPosition(
         async (position) => {
           const { latitude, longitude, heading } = position.coords;
-          
+
           try {
             await supabase.updateDriverLocation(currentUser.id, {
               lat: latitude,
@@ -398,7 +414,7 @@ const App: React.FC = () => {
   // --- Helper: Cleanup all connections ---
   const cleanupAllConnections = () => {
     console.log('[App] 🧹 Cleaning up all connections...');
-    
+
     setCurrentUser(null);
     setCurrentTrip(null);
     setAvailableTrip(null);
@@ -407,17 +423,17 @@ const App: React.FC = () => {
     setLocalStream(null);
     setRemoteStream(null);
     setCurrentTab('home');
-    
+
     if (rtcServiceRef.current) {
       rtcServiceRef.current.destroy();
       rtcServiceRef.current = null;
     }
-    
+
     if (tripSubscriptionRef.current) {
       tripSubscriptionRef.current.unsubscribe();
       tripSubscriptionRef.current = null;
     }
-    
+
     if (driverSubscriptionRef.current) {
       driverSubscriptionRef.current.unsubscribe();
       driverSubscriptionRef.current = null;
@@ -438,7 +454,7 @@ const App: React.FC = () => {
   // --- Trip Handlers ---
   const requestTrip = async () => {
     if (!currentUser) return;
-    
+
     if (!pickupInput || !destinationInput) {
       setRequestError('Please select both pickup and destination');
       return;
@@ -446,20 +462,24 @@ const App: React.FC = () => {
 
     setIsRequesting(true);
     setRequestError(undefined);
-    
+
     try {
       console.log('[App] 🚕 Requesting trip...');
       const trip = await supabase.createTrip(
-        currentUser.id, 
-        pickupInput, 
+        currentUser.id,
+        pickupInput,
         destinationInput,
         pickupCoords,
         destinationCoords
       );
-      
+
       console.log('[App] ✅ Trip created:', trip.id);
       setCurrentTrip(trip);
-      
+
+      // Trigger notification for available drivers
+      NotificationService.sendTripNotification(trip);
+
+
     } catch (error: any) {
       console.error('[App] ❌ Trip request failed:', error);
       setRequestError(error.message || 'Failed to request trip. Please try again.');
@@ -478,7 +498,7 @@ const App: React.FC = () => {
 
     try {
       const trip = await supabase.acceptTrip(availableTrip.id, currentUser.id);
-      
+
       if (trip) {
         console.log('[App] ✅ Trip accepted successfully');
         setCurrentTrip(trip);
@@ -509,7 +529,7 @@ const App: React.FC = () => {
       setCurrentTrip(null);
       return;
     }
-    
+
     console.log(`[App] 🔄 Updating trip status: ${currentTrip.status} → ${status}`);
 
     // Track local update time
@@ -521,7 +541,7 @@ const App: React.FC = () => {
 
     try {
       const updatedTrip = await supabase.updateTripStatus(currentTrip.id, status);
-      
+
       if (updatedTrip) {
         console.log('[App] ✅ Trip status updated successfully');
         setCurrentTrip(updatedTrip);
@@ -543,18 +563,18 @@ const App: React.FC = () => {
     console.log('[App] 📍 Location selected:', name);
     setDestinationInput(name);
     setDestinationCoords(coords);
-    
+
     // Optionally reverse geocode if the name is just coordinates
     if (name.includes('Selected Location')) {
-       try {
-         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`);
-         const data = await res.json();
-         if (data && data.display_name) {
-           setDestinationInput(data.display_name.split(',')[0]); // Shorten address
-         }
-       } catch (err) {
-         console.warn('Reverse geocode failed:', err);
-       }
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`);
+        const data = await res.json();
+        if (data && data.display_name) {
+          setDestinationInput(data.display_name.split(',')[0]); // Shorten address
+        }
+      } catch (err) {
+        console.warn('Reverse geocode failed:', err);
+      }
     }
   };
 
@@ -594,7 +614,16 @@ const App: React.FC = () => {
       if (isMounted.current) {
         setLocalStream(stream);
         console.log('[App] ✅ Local stream started');
+
+        // Trigger call notification for the other peer
+        if (currentTrip) {
+          const targetId = currentUser.role === UserRole.RIDER ? currentTrip.driverId : currentTrip.riderId;
+          if (targetId) {
+            NotificationService.sendCallNotification(targetId, currentUser.name);
+          }
+        }
       }
+
     } catch (err: any) {
       console.error("[App] ❌ Call initiation failed:", err);
       if (isMounted.current) {
@@ -697,29 +726,29 @@ const App: React.FC = () => {
 
   // --- Render Unauthenticated ---
   if (!currentUser) {
-    return <AuthModal onSuccess={() => {}} />;
+    return <AuthModal onSuccess={() => { }} />;
   }
 
   // --- Render Authenticated App ---
   return (
     <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans">
-      
+
       {currentTab === 'home' && (
         <Header user={currentUser} onLogout={logout} />
       )}
 
       <div className="flex-1 relative">
-        
-        <div 
+
+        <div
           className="absolute inset-0 flex flex-col"
-          style={{ 
+          style={{
             visibility: currentTab === 'home' ? 'visible' : 'hidden',
-            pointerEvents: currentTab === 'home' ? 'auto' : 'none' 
+            pointerEvents: currentTab === 'home' ? 'auto' : 'none'
           }}
         >
           <div className="absolute inset-0 z-0">
-            <MapVisualizer 
-              role={currentUser.role} 
+            <MapVisualizer
+              role={currentUser.role}
               driverLocation={currentTrip?.driverLocation}
               pickup={currentTrip?.pickup || pickupInput}
               destination={currentTrip?.destination || destinationInput}
@@ -747,15 +776,15 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="flex gap-3">
-                  <button 
+                  <button
                     onClick={() => setHasIncomingCall(false)}
                     className="flex-1 px-4 py-3 bg-white/20 text-white font-semibold rounded-xl hover:bg-white/30 transition-colors"
                   >
                     Decline
                   </button>
-                  <button 
+                  <button
                     onClick={answerCall}
                     className="flex-1 px-4 py-3 bg-white text-emerald-600 font-semibold rounded-xl hover:bg-emerald-50 transition-colors shadow-lg"
                   >
@@ -784,7 +813,7 @@ const App: React.FC = () => {
                     NEW
                   </span>
                 </div>
-                
+
                 <div className="space-y-3 mb-6">
                   <div className="flex items-center gap-3 text-zinc-700">
                     <span className="text-sm">📍</span>
@@ -797,13 +826,13 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex gap-3">
-                  <button 
+                  <button
                     onClick={() => setAvailableTrip(null)}
                     className="flex-1 px-4 py-3 bg-zinc-100 text-zinc-700 font-semibold rounded-xl hover:bg-zinc-200 transition-colors"
                   >
                     Decline
                   </button>
-                  <button 
+                  <button
                     onClick={acceptTrip}
                     className="flex-1 px-4 py-3 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-lg"
                   >
@@ -816,9 +845,9 @@ const App: React.FC = () => {
 
           {/* Bottom Controls */}
           <div className="absolute bottom-20 left-0 right-0 z-40 p-4 md:max-w-md md:mx-auto md:bottom-28">
-            
+
             {currentUser.role === UserRole.RIDER && !currentTrip && (
-              <RideRequestPanel 
+              <RideRequestPanel
                 pickup={pickupInput}
                 setPickup={setPickupInput}
                 destination={destinationInput}
@@ -830,7 +859,7 @@ const App: React.FC = () => {
             )}
 
             {currentTrip && (
-              <TripStatusPanel 
+              <TripStatusPanel
                 trip={currentTrip}
                 userRole={currentUser.role}
                 onStatusUpdate={updateTripStatus}
@@ -840,11 +869,11 @@ const App: React.FC = () => {
 
             {currentUser.role === UserRole.DRIVER && !currentTrip && !availableTrip && (
               <div className="bg-white rounded-2xl shadow-xl p-6 text-center border border-zinc-100">
-                  <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-                    <span className="text-3xl">🚕</span>
-                  </div>
-                  <h3 className="text-xl font-bold text-zinc-900">You are Online</h3>
-                  <p className="text-zinc-500 mt-1">Waiting for ride requests...</p>
+                <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                  <span className="text-3xl">🚕</span>
+                </div>
+                <h3 className="text-xl font-bold text-zinc-900">You are Online</h3>
+                <p className="text-zinc-500 mt-1">Waiting for ride requests...</p>
               </div>
             )}
           </div>
@@ -855,7 +884,7 @@ const App: React.FC = () => {
       </div>
 
       {isCallModalOpen && (
-        <CallModal 
+        <CallModal
           localStream={localStream}
           remoteStream={remoteStream}
           onEndCall={endCall}
@@ -864,9 +893,9 @@ const App: React.FC = () => {
         />
       )}
 
-      <BottomNav 
-        currentTab={currentTab} 
-        onTabChange={setCurrentTab} 
+      <BottomNav
+        currentTab={currentTab}
+        onTabChange={setCurrentTab}
         hasActiveTrip={!!currentTrip}
       />
     </div>
