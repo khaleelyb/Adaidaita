@@ -3,7 +3,7 @@ import { UserRole } from '../types';
 import { authService } from '../services/auth';
 import { NotificationService } from '../services/notificationService';
 import { Button } from './Button';
-import { Mail, Lock, User as UserIcon, Car, AlertCircle, CheckCircle } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, Car, AlertCircle, CheckCircle, Check } from 'lucide-react';
 
 interface AuthModalProps {
   onSuccess: () => void;
@@ -273,10 +273,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
                 type="button" 
                 fullWidth 
                 isLoading={savingUserInfo} 
-                className="h-12 text-base bg-emerald-600 hover:bg-emerald-700"
+                className="h-12 text-base bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center gap-2"
                 onClick={handleSaveUserInfo}
               >
-                {savingUserInfo ? 'Saving User Info...' : 'Save User Information'}
+                {savingUserInfo ? (
+                  'Saving...'
+                ) : (
+                  <>
+                    <Check size={18} />
+                    Save User
+                  </>
+                )}
               </Button>
             )}
 
@@ -292,38 +299,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
               </button>
             </div>
           </form>
-
-          {/* Test Credentials */}
-          {isLogin && (
-            <div className="mt-6 pt-6 border-t border-zinc-700">
-              <p className="text-xs text-zinc-500 mb-3 text-center">Quick test with demo accounts:</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => fillTestCredentials('rider')}
-                  className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-xs font-medium transition-colors active:scale-95"
-                  disabled={loading}
-                >
-                  Test as Rider
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fillTestCredentials('driver')}
-                  className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-xs font-medium transition-colors active:scale-95"
-                  disabled={loading}
-                >
-                  Test as Driver
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Debug Info */}
-        <div className="text-center">
-          <p className="text-xs text-zinc-600">
-            Having trouble? Check the browser console for details (F12)
-          </p>
         </div>
       </div>
     </div>
