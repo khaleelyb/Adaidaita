@@ -765,7 +765,16 @@ const App: React.FC = () => {
 
   // --- Render Unauthenticated ---
   if (!currentUser) {
-    return <AuthModal onSuccess={() => { }} />;
+    return (
+      <AuthModal onSuccess={() => {
+        // Refresh user data after successful login
+        authService.getCurrentUser().then(user => {
+          if (user && isMounted.current) {
+            setCurrentUser(user);
+          }
+        });
+      }} />
+    );
   }
 
   // --- Render Authenticated App ---

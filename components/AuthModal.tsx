@@ -268,7 +268,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
             </Button>
 
             {/* Save User Info Button (shown after successful sign in) */}
-            {success && isLogin && !userInfoSaved && (
+            {success && isLogin && !userInfoSaved && !loading && (
               <Button 
                 type="button" 
                 fullWidth 
