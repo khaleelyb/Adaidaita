@@ -20,9 +20,45 @@ messaging.onBackgroundMessage((payload) => {
 
     const notificationTitle = payload.notification.title || 'Adaidaita';
     const notificationOptions = {
-        body: payload.notification.body,
-        icon: '/favicon.ico'
+        body: payload.notification.body || '',
+        icon: '/favicon.ico',
+        badge: '/favicon.ico',
+        tag: payload.data?.type || 'notification',
+        requireInteraction: payload.data?.type === 'new_trip' || payload.data?.type === 'incoming_call',
+        data: payload.data || {},
+        actions: [
+            {
+                action: 'open',
+                title: 'Open App'
+            },
+            {
+                action: 'dismiss',
+                title: 'Dismiss'
+            }
+        ]
     };
 
     self.registration.showNotification(notificationTitle, notificationOptions);
 });
+
+// Handle notification clicks
+self.addEventListener('notificationclick', (event) => {
+    console.log('[firebase-messaging-sw.js] Notification clicked:', event.notification);
+    event.notification.close();
+    
+    event.waitUntil(
+        clients.matchAll({ type: 'window' }).then((clientList) => {
+            // Check if app window is already open
+            for (let client of clientList) {
+                if (client.url === '/' && 'focus' in client) {
+                    return client.focus();
+                }
+            }
+            // If not open, open the app
+            if (clients.openWindow) {
+                return clients.openWindow('/');
+            }
+        })
+    );
+});
+

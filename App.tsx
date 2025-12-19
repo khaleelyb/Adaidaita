@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { UserRole, Trip, TripStatus, User } from './types';
 import { supabase } from './services/Supabase';
 import { authService } from './services/auth';
@@ -13,6 +13,7 @@ import { BottomNav } from './components/BottomNav';
 import { Account } from './pages/Account';
 import { Services } from './pages/Services';
 import { NotificationService } from './services/notificationService';
+import { NotificationToast, Toast } from './components/NotificationToast';
 
 
 const App: React.FC = () => {
@@ -39,6 +40,7 @@ const App: React.FC = () => {
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
   const [hasIncomingCall, setHasIncomingCall] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
 
   // WebRTC State
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -52,6 +54,21 @@ const App: React.FC = () => {
   const watchIdRef = useRef<number | null>(null);
   const tripSubscriptionRef = useRef<any>(null);
   const driverSubscriptionRef = useRef<any>(null);
+
+  // Toast Handlers
+  const addToast = useCallback((type: 'success' | 'error' | 'info' | 'warning', title: string, message: string, duration = 4000) => {
+    const id = Date.now().toString();
+    const toast: Toast = { id, type, title, message };
+    setToasts(prev => [...prev, toast]);
+    
+    if (duration > 0) {
+      setTimeout(() => removeToast(id), duration);
+    }
+  }, []);
+
+  const removeToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
 
   // --- Auth Handlers ---
   useEffect(() => {
@@ -478,6 +495,7 @@ const App: React.FC = () => {
 
       // Trigger notification for available drivers
       console.log('[App] 📣 Sending trip notification to drivers...');
+      addToast('info', '🚗 Trip Requested', 'Finding available drivers near you...');
       await NotificationService.sendTripNotification(trip);
       console.log('[App] ✅ Trip notification sent successfully');
 
@@ -504,6 +522,7 @@ const App: React.FC = () => {
       if (trip) {
         console.log('[App] ✅ Trip accepted successfully');
         setCurrentTrip(trip);
+        addToast('success', '✅ Trip Accepted', 'Driver has accepted your trip request!');
         
         // Send notification to rider that trip was accepted
         if (trip.riderId) {
@@ -534,9 +553,11 @@ const App: React.FC = () => {
       // Send completion notification to the other user
       if (currentTrip.riderId && currentUser?.role === UserRole.DRIVER) {
         console.log('[App] 📣 Sending trip completion notification to rider...');
+        addToast('success', '✅ Trip Completed', 'Trip has been completed successfully!');
         await NotificationService.sendTripCompletedNotification(currentTrip.riderId, currentUser.name || 'Driver');
       } else if (currentTrip.driverId && currentUser?.role === UserRole.RIDER) {
         console.log('[App] 📣 Sending trip completion notification to driver...');
+        addToast('success', '✅ Trip Completed', 'Thank you for riding with us!');
         await NotificationService.sendTripCompletedNotification(currentTrip.driverId, currentUser.name || 'Rider');
       }
       
@@ -750,6 +771,7 @@ const App: React.FC = () => {
   // --- Render Authenticated App ---
   return (
     <div className="flex flex-col h-screen bg-white relative overflow-hidden font-sans">
+      <NotificationToast toasts={toasts} onRemove={removeToast} />
 
       {currentTab === 'home' && (
         <Header user={currentUser} onLogout={logout} />

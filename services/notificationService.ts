@@ -56,10 +56,20 @@ export class NotificationService {
             console.log('[NotificationService] Message received in foreground: ', payload);
             if (payload.notification) {
                 // Show browser notification if app is in foreground
-                new Notification(payload.notification.title || 'Adaidaita', {
-                    body: payload.notification.body,
-                    icon: '/favicon.ico'
-                });
+                const title = payload.notification.title || 'Adaidaita';
+                const options = {
+                    body: payload.notification.body || '',
+                    icon: '/favicon.ico',
+                    tag: payload.data?.type || 'notification',
+                    requireInteraction: payload.data?.type === 'new_trip' || payload.data?.type === 'incoming_call'
+                };
+                
+                try {
+                    new Notification(title, options);
+                    console.log('[NotificationService] Notification displayed:', title);
+                } catch (err) {
+                    console.warn('[NotificationService] Could not show notification:', err);
+                }
             }
         });
     }
